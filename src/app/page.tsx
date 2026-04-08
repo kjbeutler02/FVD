@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Header from "@/components/Header";
 import StepIndicator from "@/components/StepIndicator";
 import ProjectInput from "@/components/ProjectInput";
 import FolderTree from "@/components/FolderTree";
 import ProgressPanel from "@/components/ProgressPanel";
+import PassphraseGate from "@/components/PassphraseGate";
 import { useDownloadOrchestrator } from "@/hooks/useDownloadOrchestrator";
 import { fetchFolders, fetchAllDocuments, type FolderResponse } from "@/lib/api";
 import type { FolderNode, DocumentItem } from "@/types/filevine";
@@ -13,7 +14,20 @@ import type { FolderNode, DocumentItem } from "@/types/filevine";
 type Step = 1 | 2 | 3;
 
 export default function Home() {
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [step, setStep] = useState<Step>(1);
+
+  // Check if already authenticated (cookie exists) on mount
+  useEffect(() => {
+    fetch("/api/auth", { method: "POST" })
+      .then((res) => {
+        // If we get a response (even an error from Filevine), the middleware let us through
+        setAuthenticated(res.status !== 401);
+      })
+      .catch(() => {
+        setAuthenticated(false);
+      });
+  }, []);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +86,16 @@ export default function Home() {
     setDocCount(0);
     setError(null);
   }, [reset]);
+
+  // Show nothing while checking auth
+  if (authenticated === null) {
+    return <div className="min-h-screen bg-gray-50" />;
+  }
+
+  // Show passphrase gate if not authenticated
+  if (!authenticated) {
+    return <PassphraseGate onAuthenticated={() => setAuthenticated(true)} />;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
