@@ -3,8 +3,8 @@
 import { useState, useCallback, useRef } from "react";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
-import { fetchLocators, buildFolderPath } from "@/lib/api";
-import { LOCATOR_BATCH_SIZE, DOWNLOAD_CONCURRENCY, MAX_RETRIES } from "@/lib/constants";
+import { downloadFileViaProxy, buildFolderPath } from "@/lib/api";
+import { DOWNLOAD_CONCURRENCY, MAX_RETRIES } from "@/lib/constants";
 import type { DocumentItem } from "@/types/filevine";
 import type { DownloadProgress, FileProgress } from "@/types/download";
 
@@ -86,56 +86,14 @@ export function useDownloadOrchestrator() {
 
       const zip = new JSZip();
 
-      // Process in batches of LOCATOR_BATCH_SIZE
-      for (let i = 0; i < filteredDocs.length; i += LOCATOR_BATCH_SIZE) {
-        if (cancelledRef.current) break;
-
-        const batch = filteredDocs.slice(i, i + LOCATOR_BATCH_SIZE);
-        const batchIds = batch.map((d) => d.documentId);
-
-        // Mark batch as fetching URLs
-        for (const id of batchIds) {
-          updateFile(id, { status: "fetching-url" });
-        }
-
-        let locators;
-        try {
-          locators = await fetchLocators(batchIds);
-        } catch (err) {
-          // Mark entire batch as failed
-          for (const id of batchIds) {
-            updateFile(id, {
-              status: "error",
-              error: err instanceof Error ? err.message : "Failed to get download URL",
-            });
-          }
-          continue;
-        }
-
-        // Build a map of docId -> presigned URL
-        const urlMap = new Map<number, string>();
-        for (const loc of locators) {
-          if (loc.url) {
-            urlMap.set(loc.documentId, loc.url);
-          } else {
-            updateFile(loc.documentId, {
-              status: "error",
-              error: loc.error || "No download URL returned",
-            });
-          }
-        }
-
-        // Download files with concurrency limit
-        const downloadQueue = batch.filter((d) => urlMap.has(d.documentId));
-        await downloadWithConcurrency(
-          downloadQueue,
-          urlMap,
-          folderFlatMap,
-          zip,
-          updateFile,
-          cancelledRef
-        );
-      }
+      // Download all files with concurrency limit, proxied through our API
+      await downloadWithConcurrency(
+        filteredDocs,
+        folderFlatMap,
+        zip,
+        updateFile,
+        cancelledRef
+      );
 
       if (cancelledRef.current) {
         setProgress((prev) => ({ ...prev, phase: "idle" }));
@@ -175,7 +133,6 @@ export function useDownloadOrchestrator() {
 
 async function downloadWithConcurrency(
   docs: DocumentItem[],
-  urlMap: Map<number, string>,
   folderFlatMap: Record<number, { name: string; parentId: number | null }>,
   zip: JSZip,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
@@ -193,11 +150,8 @@ async function downloadWithConcurrency(
 
       while (active < DOWNLOAD_CONCURRENCY && index < docs.length) {
         const doc = docs[index++];
-        const url = urlMap.get(doc.documentId);
-        if (!url) continue;
-
         active++;
-        downloadSingleFile(doc, url, folderFlatMap, zip, updateFile).finally(() => {
+        downloadSingleFile(doc, folderFlatMap, zip, updateFile).finally(() => {
           active--;
           if (index >= docs.length && active === 0) {
             resolve();
@@ -218,7 +172,6 @@ async function downloadWithConcurrency(
 
 async function downloadSingleFile(
   doc: DocumentItem,
-  url: string,
   folderFlatMap: Record<number, { name: string; parentId: number | null }>,
   zip: JSZip,
   updateFile: (docId: number, update: Partial<FileProgress>) => void
@@ -227,10 +180,8 @@ async function downloadSingleFile(
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const arrayBuffer = await res.arrayBuffer();
+      // Download via our server-side proxy (bypasses S3 CORS)
+      const arrayBuffer = await downloadFileViaProxy(doc.documentId);
       const folderPath = buildFolderPath(doc.folderId, folderFlatMap);
       const zipPath = folderPath ? `${folderPath}/${doc.filename}` : doc.filename;
 

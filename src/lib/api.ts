@@ -110,6 +110,19 @@ export async function fetchLocators(documentIds: number[]): Promise<LocatorResul
   return data.locators;
 }
 
+export async function downloadFileViaProxy(documentId: number): Promise<ArrayBuffer> {
+  const res = await fetchWithAuth("/api/download", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ documentId }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Download failed for doc ${documentId}`);
+  }
+  return res.arrayBuffer();
+}
+
 export function buildFolderPath(
   folderId: number,
   flatMap: Record<number, { name: string; parentId: number | null }>
