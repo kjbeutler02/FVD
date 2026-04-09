@@ -75,7 +75,8 @@ export async function fetchDocumentPage(
 
 export async function fetchAllDocuments(
   projectId: number,
-  onProgress?: (loaded: number) => void
+  onProgress?: (loaded: number) => void,
+  folderIds?: Set<number> | null
 ): Promise<DocumentItem[]> {
   const allDocs: DocumentItem[] = [];
   let lastId = 0;
@@ -83,7 +84,11 @@ export async function fetchAllDocuments(
 
   while (hasMore) {
     const page = await fetchDocumentPage(projectId, lastId, 200);
-    allDocs.push(...page.items);
+    // Filter by selected folders if provided
+    const filtered = folderIds
+      ? page.items.filter((d) => folderIds.has(d.folderId))
+      : page.items;
+    allDocs.push(...filtered);
     onProgress?.(allDocs.length);
     hasMore = page.hasMore;
     if (page.lastId != null) {

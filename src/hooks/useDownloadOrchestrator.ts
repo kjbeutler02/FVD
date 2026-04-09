@@ -64,11 +64,15 @@ export function useDownloadOrchestrator() {
         scanProgress: 0,
       });
 
-      let allDocs: DocumentItem[];
+      let filteredDocs: DocumentItem[];
       try {
-        allDocs = await fetchAllDocuments(projectId, (count) => {
-          setProgress((prev) => ({ ...prev, scanProgress: count }));
-        });
+        filteredDocs = await fetchAllDocuments(
+          projectId,
+          (count) => {
+            setProgress((prev) => ({ ...prev, scanProgress: count }));
+          },
+          selectedFolderIds
+        );
       } catch (err) {
         setProgress((prev) => ({
           ...prev,
@@ -82,11 +86,6 @@ export function useDownloadOrchestrator() {
         setProgress((prev) => ({ ...prev, phase: "idle" }));
         return;
       }
-
-      // Filter documents by selected folders
-      const filteredDocs = selectedFolderIds
-        ? allDocs.filter((d) => selectedFolderIds.has(d.folderId))
-        : allDocs;
 
       if (filteredDocs.length === 0) {
         setProgress((prev) => ({
