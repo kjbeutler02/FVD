@@ -14,6 +14,7 @@ export interface DownloadProgress {
   failedFiles: number;
   currentFile: string | null;
   files: Map<number, FileProgress>;
-  phase: "idle" | "downloading" | "zipping" | "complete" | "error";
+  phase: "idle" | "scanning" | "downloading" | "zipping" | "complete" | "error";
+  scanProgress?: number; // documents found so far during scanning
   errorMessage?: string;
 }

@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef } from "react";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
-import { downloadFileViaProxy, buildFolderPath } from "@/lib/api";
+import { downloadFileViaProxy, fetchAllDocuments, buildFolderPath } from "@/lib/api";
 import { DOWNLOAD_CONCURRENCY, MAX_RETRIES } from "@/lib/constants";
 import type { DocumentItem } from "@/types/filevine";
 import type { DownloadProgress, FileProgress } from "@/types/download";
@@ -51,19 +51,53 @@ export function useDownloadOrchestrator() {
 
   const startDownload = useCallback(
     async (
-      documents: DocumentItem[],
       folderFlatMap: Record<number, { name: string; parentId: number | null }>,
       selectedFolderIds: Set<number> | null,
       projectId: number
     ) => {
       cancelledRef.current = false;
 
+      // Phase 1: Scan for documents
+      setProgress({
+        ...initialProgress(),
+        phase: "scanning",
+        scanProgress: 0,
+      });
+
+      let allDocs: DocumentItem[];
+      try {
+        allDocs = await fetchAllDocuments(projectId, (count) => {
+          setProgress((prev) => ({ ...prev, scanProgress: count }));
+        });
+      } catch (err) {
+        setProgress((prev) => ({
+          ...prev,
+          phase: "error",
+          errorMessage: err instanceof Error ? err.message : "Failed to fetch document list",
+        }));
+        return;
+      }
+
+      if (cancelledRef.current) {
+        setProgress((prev) => ({ ...prev, phase: "idle" }));
+        return;
+      }
+
       // Filter documents by selected folders
       const filteredDocs = selectedFolderIds
-        ? documents.filter((d) => selectedFolderIds.has(d.folderId))
-        : documents;
+        ? allDocs.filter((d) => selectedFolderIds.has(d.folderId))
+        : allDocs;
 
-      // Initialize progress
+      if (filteredDocs.length === 0) {
+        setProgress((prev) => ({
+          ...prev,
+          phase: "error",
+          errorMessage: "No documents found in the selected folders.",
+        }));
+        return;
+      }
+
+      // Phase 2: Download files
       const files = new Map<number, FileProgress>();
       for (const doc of filteredDocs) {
         const folderPath = buildFolderPath(doc.folderId, folderFlatMap);
@@ -86,7 +120,6 @@ export function useDownloadOrchestrator() {
 
       const zip = new JSZip();
 
-      // Download all files with concurrency limit, proxied through our API
       await downloadWithConcurrency(
         filteredDocs,
         folderFlatMap,
@@ -100,7 +133,7 @@ export function useDownloadOrchestrator() {
         return;
       }
 
-      // Generate ZIP
+      // Phase 3: Generate ZIP
       setProgress((prev) => ({ ...prev, phase: "zipping", currentFile: null }));
 
       try {
@@ -180,7 +213,6 @@ async function downloadSingleFile(
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      // Download via our server-side proxy (bypasses S3 CORS)
       const arrayBuffer = await downloadFileViaProxy(doc.documentId);
       const folderPath = buildFolderPath(doc.folderId, folderFlatMap);
       const zipPath = folderPath ? `${folderPath}/${doc.filename}` : doc.filename;

@@ -9,15 +9,11 @@ import {
   Check,
   Minus,
   Download,
-  Loader2,
 } from "lucide-react";
-import type { FolderNode, DocumentItem } from "@/types/filevine";
+import type { FolderNode } from "@/types/filevine";
 
 interface Props {
   tree: FolderNode[];
-  documents: DocumentItem[];
-  loadingDocs: boolean;
-  docCount: number;
   onDownload: (selectedFolderIds: Set<number> | null) => void;
 }
 
@@ -43,7 +39,7 @@ function getDescendantIds(node: FolderNode): Set<number> {
   return ids;
 }
 
-export default function FolderTree({ tree, documents, loadingDocs, docCount, onDownload }: Props) {
+export default function FolderTree({ tree, onDownload }: Props) {
   const allIds = useMemo(() => getAllFolderIds(tree), [tree]);
   const [selected, setSelected] = useState<Set<number>>(() => new Set(allIds));
   const [expanded, setExpanded] = useState<Set<number>>(() => {
@@ -51,22 +47,8 @@ export default function FolderTree({ tree, documents, loadingDocs, docCount, onD
     return new Set(tree.map((n) => n.id));
   });
 
-  // Count docs per folder
-  const docsByFolder = useMemo(() => {
-    const map = new Map<number, number>();
-    for (const doc of documents) {
-      map.set(doc.folderId, (map.get(doc.folderId) ?? 0) + 1);
-    }
-    return map;
-  }, [documents]);
-
-  // Count selected docs
-  const selectedDocCount = useMemo(() => {
-    if (selected.size === allIds.size) return documents.length;
-    return documents.filter((d) => selected.has(d.folderId)).length;
-  }, [selected, allIds, documents]);
-
   const allSelected = selected.size === allIds.size;
+  const selectedFolderCount = selected.size;
 
   function toggleExpand(id: number) {
     setExpanded((prev) => {
@@ -135,19 +117,7 @@ export default function FolderTree({ tree, documents, loadingDocs, docCount, onD
             </button>
           </div>
           <p className="text-sm text-gray-500">
-            {loadingDocs ? (
-              <span className="flex items-center gap-1">
-                <Loader2 size={14} className="animate-spin" />
-                Loading documents... ({docCount} found so far)
-              </span>
-            ) : (
-              <>
-                {allIds.size} folders, {documents.length} documents total
-                {selected.size < allIds.size && (
-                  <> &middot; {selectedDocCount} documents selected</>
-                )}
-              </>
-            )}
+            {allIds.size} folders &middot; {selectedFolderCount} selected
           </p>
         </div>
 
@@ -159,7 +129,6 @@ export default function FolderTree({ tree, documents, loadingDocs, docCount, onD
               depth={0}
               expanded={expanded}
               selected={selected}
-              docsByFolder={docsByFolder}
               allIds={allIds}
               onToggleExpand={toggleExpand}
               onToggleSelect={toggleNode}
@@ -171,11 +140,11 @@ export default function FolderTree({ tree, documents, loadingDocs, docCount, onD
         <div className="p-4 border-t border-gray-200">
           <button
             onClick={handleDownload}
-            disabled={selectedDocCount === 0 || loadingDocs}
+            disabled={selectedFolderCount === 0}
             className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-blue-600 text-white font-medium text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Download size={18} />
-            Download {selectedDocCount} documents as ZIP
+            Download Selected Folders as ZIP
           </button>
         </div>
       </div>
@@ -203,7 +172,6 @@ interface TreeNodeProps {
   depth: number;
   expanded: Set<number>;
   selected: Set<number>;
-  docsByFolder: Map<number, number>;
   allIds: Set<number>;
   onToggleExpand: (id: number) => void;
   onToggleSelect: (node: FolderNode) => void;
@@ -215,7 +183,6 @@ function TreeNode({
   depth,
   expanded,
   selected,
-  docsByFolder,
   allIds,
   onToggleExpand,
   onToggleSelect,
@@ -224,7 +191,6 @@ function TreeNode({
   const isExpanded = expanded.has(node.id);
   const hasChildren = node.children.length > 0;
   const checkState = getCheckState(node);
-  const docCount = docsByFolder.get(node.id) ?? 0;
 
   return (
     <div>
@@ -269,12 +235,6 @@ function TreeNode({
           {node.name}
         </span>
 
-        {/* Doc count */}
-        {docCount > 0 && (
-          <span className="text-xs text-gray-400 ml-auto shrink-0">
-            {docCount} {docCount === 1 ? "doc" : "docs"}
-          </span>
-        )}
       </div>
 
       {/* Children */}
@@ -287,7 +247,6 @@ function TreeNode({
             depth={depth + 1}
             expanded={expanded}
             selected={selected}
-            docsByFolder={docsByFolder}
             allIds={allIds}
             onToggleExpand={onToggleExpand}
             onToggleSelect={onToggleSelect}

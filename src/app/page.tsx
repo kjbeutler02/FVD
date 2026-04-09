@@ -8,8 +8,8 @@ import FolderTree from "@/components/FolderTree";
 import ProgressPanel from "@/components/ProgressPanel";
 import PassphraseGate from "@/components/PassphraseGate";
 import { useDownloadOrchestrator } from "@/hooks/useDownloadOrchestrator";
-import { fetchFolders, fetchAllDocuments, type FolderResponse } from "@/lib/api";
-import type { FolderNode, DocumentItem } from "@/types/filevine";
+import { fetchFolders, type FolderResponse } from "@/lib/api";
+import type { FolderNode } from "@/types/filevine";
 
 type Step = 1 | 2 | 3;
 
@@ -36,11 +36,6 @@ export default function Home() {
   const [folderTree, setFolderTree] = useState<FolderNode[]>([]);
   const [folderFlatMap, setFolderFlatMap] = useState<FolderResponse["flatMap"]>({});
 
-  // Document data
-  const [documents, setDocuments] = useState<DocumentItem[]>([]);
-  const [loadingDocs, setLoadingDocs] = useState(false);
-  const [docCount, setDocCount] = useState(0);
-
   const { progress, startDownload, cancel, reset } = useDownloadOrchestrator();
 
   const handleProjectSubmit = useCallback(async (pid: number) => {
@@ -53,13 +48,6 @@ export default function Home() {
       setFolderTree(data.tree);
       setFolderFlatMap(data.flatMap);
       setStep(2);
-
-      // Start loading documents in background
-      setLoadingDocs(true);
-      setDocCount(0);
-      const docs = await fetchAllDocuments(pid, (count) => setDocCount(count));
-      setDocuments(docs);
-      setLoadingDocs(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load project");
     } finally {
@@ -71,9 +59,9 @@ export default function Home() {
     (selectedFolderIds: Set<number> | null) => {
       if (!projectId) return;
       setStep(3);
-      startDownload(documents, folderFlatMap, selectedFolderIds, projectId);
+      startDownload(folderFlatMap, selectedFolderIds, projectId);
     },
-    [projectId, documents, folderFlatMap, startDownload]
+    [projectId, folderFlatMap, startDownload]
   );
 
   const handleReset = useCallback(() => {
@@ -82,8 +70,6 @@ export default function Home() {
     setProjectId(null);
     setFolderTree([]);
     setFolderFlatMap({});
-    setDocuments([]);
-    setDocCount(0);
     setError(null);
   }, [reset]);
 
@@ -114,9 +100,6 @@ export default function Home() {
         {step === 2 && (
           <FolderTree
             tree={folderTree}
-            documents={documents}
-            loadingDocs={loadingDocs}
-            docCount={docCount}
             onDownload={handleDownload}
           />
         )}

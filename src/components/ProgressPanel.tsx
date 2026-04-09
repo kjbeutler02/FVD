@@ -19,9 +19,9 @@ interface Props {
 }
 
 export default function ProgressPanel({ progress, onCancel, onReset }: Props) {
-  const { totalFiles, completedFiles, failedFiles, phase, files, errorMessage } = progress;
+  const { totalFiles, completedFiles, failedFiles, phase, files, errorMessage, scanProgress } = progress;
   const percent = totalFiles > 0 ? Math.round((completedFiles / totalFiles) * 100) : 0;
-  const isActive = phase === "downloading" || phase === "zipping";
+  const isActive = phase === "scanning" || phase === "downloading" || phase === "zipping";
 
   // Sort files: downloading first, then pending, then complete, then error
   const sortedFiles = Array.from(files.values()).sort((a, b) => {
@@ -36,6 +36,7 @@ export default function ProgressPanel({ progress, onCancel, onReset }: Props) {
         <div className="p-6 border-b border-gray-200">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-gray-900">
+              {phase === "scanning" && "Scanning for Documents"}
               {phase === "downloading" && "Downloading Files"}
               {phase === "zipping" && "Creating ZIP Archive"}
               {phase === "complete" && "Download Complete"}
@@ -51,42 +52,56 @@ export default function ProgressPanel({ progress, onCancel, onReset }: Props) {
             )}
           </div>
 
-          {/* Progress bar */}
-          <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden mb-2">
-            <div
-              className={`h-full rounded-full transition-all duration-300 ${
-                phase === "error"
-                  ? "bg-red-500"
-                  : phase === "complete"
-                  ? "bg-green-500"
-                  : "bg-blue-600"
-              }`}
-              style={{
-                width: phase === "zipping" ? "100%" : `${percent}%`,
-              }}
-            />
-          </div>
-
-          {/* Stats row */}
-          <div className="flex items-center justify-between text-sm text-gray-500">
-            <span>
-              {phase === "zipping" ? (
-                <span className="flex items-center gap-1">
-                  <Package size={14} className="animate-pulse" />
-                  Generating ZIP file...
-                </span>
-              ) : (
-                `${completedFiles} of ${totalFiles} files`
-              )}
-            </span>
-            {failedFiles > 0 && (
-              <span className="text-red-500 flex items-center gap-1">
-                <AlertTriangle size={14} />
-                {failedFiles} failed
+          {/* Scanning phase */}
+          {phase === "scanning" && (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 size={16} className="animate-spin text-blue-500" />
+              <span>
+                Scanning for documents... {scanProgress != null && scanProgress > 0 && `(${scanProgress} found so far)`}
               </span>
-            )}
-            {phase === "downloading" && <span>{percent}%</span>}
-          </div>
+            </div>
+          )}
+
+          {/* Progress bar (downloading / zipping / complete / error) */}
+          {phase !== "scanning" && (
+            <>
+              <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden mb-2">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    phase === "error"
+                      ? "bg-red-500"
+                      : phase === "complete"
+                      ? "bg-green-500"
+                      : "bg-blue-600"
+                  }`}
+                  style={{
+                    width: phase === "zipping" ? "100%" : `${percent}%`,
+                  }}
+                />
+              </div>
+
+              {/* Stats row */}
+              <div className="flex items-center justify-between text-sm text-gray-500">
+                <span>
+                  {phase === "zipping" ? (
+                    <span className="flex items-center gap-1">
+                      <Package size={14} className="animate-pulse" />
+                      Generating ZIP file...
+                    </span>
+                  ) : (
+                    `${completedFiles} of ${totalFiles} files`
+                  )}
+                </span>
+                {failedFiles > 0 && (
+                  <span className="text-red-500 flex items-center gap-1">
+                    <AlertTriangle size={14} />
+                    {failedFiles} failed
+                  </span>
+                )}
+                {phase === "downloading" && <span>{percent}%</span>}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Error message */}
