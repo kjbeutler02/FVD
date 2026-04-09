@@ -8,13 +8,14 @@ interface Props {
 }
 
 export default function PassphraseGate({ onAuthenticated }: Props) {
-  const [passphrase, setPassphrase] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!passphrase.trim()) return;
+    if (!username.trim() || !password) return;
 
     setLoading(true);
     setError(null);
@@ -23,14 +24,14 @@ export default function PassphraseGate({ onAuthenticated }: Props) {
       const res = await fetch("/api/verify-passphrase", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ passphrase: passphrase.trim() }),
+        body: JSON.stringify({ username: username.trim(), password }),
       });
 
       if (res.ok) {
         onAuthenticated();
       } else {
-        setError("Invalid passphrase. Please try again.");
-        setPassphrase("");
+        setError("Invalid username or password.");
+        setPassword("");
       }
     } catch {
       setError("Network error. Please try again.");
@@ -51,23 +52,47 @@ export default function PassphraseGate({ onAuthenticated }: Props) {
               Filevine Project Downloader
             </h1>
             <p className="text-sm text-gray-500 mt-1">
-              Enter the team passphrase to continue
+              Sign in to continue
             </p>
           </div>
 
           <form onSubmit={handleSubmit}>
-            <div className="mb-4">
+            <div className="mb-3">
+              <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
+                Username
+              </label>
               <input
-                type="password"
-                value={passphrase}
+                id="username"
+                type="text"
+                value={username}
                 onChange={(e) => {
-                  setPassphrase(e.target.value);
+                  setUsername(e.target.value);
                   setError(null);
                 }}
-                placeholder="Passphrase"
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                placeholder="Enter your username"
+                className="w-full px-4 py-2.5 rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                 disabled={loading}
                 autoFocus
+                autoComplete="username"
+              />
+            </div>
+
+            <div className="mb-4">
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setError(null);
+                }}
+                placeholder="Enter your password"
+                className="w-full px-4 py-2.5 rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                disabled={loading}
+                autoComplete="current-password"
               />
             </div>
 
@@ -79,13 +104,13 @@ export default function PassphraseGate({ onAuthenticated }: Props) {
 
             <button
               type="submit"
-              disabled={loading || !passphrase.trim()}
+              disabled={loading || !username.trim() || !password}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-blue-600 text-white font-medium text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading ? (
                 <Loader2 size={18} className="animate-spin" />
               ) : (
-                "Continue"
+                "Sign In"
               )}
             </button>
           </form>

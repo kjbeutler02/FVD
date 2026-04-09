@@ -1,28 +1,34 @@
 import { NextResponse } from "next/server";
+import { validateCredentials, hasUsersConfigured, createAuthCookie } from "@/lib/users";
 
 export async function POST(request: Request) {
-  const passphrase = process.env.APP_PASSPHRASE;
-  if (!passphrase) {
+  if (!hasUsersConfigured()) {
     return NextResponse.json(
-      { error: "APP_PASSPHRASE not configured on server" },
+      { error: "APP_USERS not configured on server" },
       { status: 500 }
     );
   }
 
-  let body: { passphrase?: string };
+  let body: { username?: string; password?: string };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  if (!body.passphrase || body.passphrase !== passphrase) {
-    return NextResponse.json({ error: "Invalid passphrase" }, { status: 401 });
+  if (!body.username || !body.password) {
+    return NextResponse.json({ error: "Username and password required" }, { status: 400 });
   }
 
-  // Set an httpOnly cookie so the user stays authenticated
-  const response = NextResponse.json({ ok: true });
-  response.cookies.set("fvd-auth", passphrase, {
+  const username = validateCredentials(body.username, body.password);
+  if (!username) {
+    return NextResponse.json({ error: "Invalid username or password" }, { status: 401 });
+  }
+
+  // Set a signed httpOnly cookie
+  const cookieValue = await createAuthCookie(username);
+  const response = NextResponse.json({ ok: true, username });
+  response.cookies.set("fvd-auth", cookieValue, {
     httpOnly: true,
     secure: true,
     sameSite: "strict",
