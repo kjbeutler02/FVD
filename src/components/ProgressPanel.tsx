@@ -44,6 +44,8 @@ export default function ProgressPanel({
     errorMessage,
     scanProgress,
     scanTotal,
+    scanFoldersDone,
+    scanFoldersTotal,
   } = progress;
 
   const percent =
@@ -109,15 +111,31 @@ export default function ProgressPanel({
             <div className="space-y-1.5">
               <div className="flex items-center gap-2 text-sm text-muted">
                 <Loader2 size={16} className="animate-spin text-brand" />
-                <span>Scanning the project for documents…</span>
+                <span>
+                  {scanFoldersTotal != null
+                    ? "Finding documents in your selected folders…"
+                    : "Scanning the project for documents…"}
+                </span>
               </div>
-              {scanTotal != null && scanTotal > 0 && (
+              {scanFoldersTotal != null ? (
                 <p className="pl-6 text-xs font-light text-muted">
-                  {scanTotal.toLocaleString()} documents checked
-                  {scanProgress != null && scanProgress !== scanTotal
-                    ? ` · ${scanProgress.toLocaleString()} match your selection`
+                  {Math.min(scanFoldersDone ?? 0, scanFoldersTotal).toLocaleString()} of{" "}
+                  {scanFoldersTotal.toLocaleString()}{" "}
+                  {scanFoldersTotal === 1 ? "folder" : "folders"} searched
+                  {scanProgress
+                    ? ` · ${scanProgress.toLocaleString()} ${scanProgress === 1 ? "document" : "documents"} found`
                     : ""}
                 </p>
+              ) : (
+                scanTotal != null &&
+                scanTotal > 0 && (
+                  <p className="pl-6 text-xs font-light text-muted">
+                    {scanTotal.toLocaleString()} documents checked
+                    {scanProgress != null && scanProgress !== scanTotal
+                      ? ` · ${scanProgress.toLocaleString()} match your selection`
+                      : ""}
+                  </p>
+                )
               )}
             </div>
           ) : (

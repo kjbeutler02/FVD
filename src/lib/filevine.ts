@@ -130,7 +130,8 @@ export async function fetchDocumentPage(
   projectId: number,
   lastId: number,
   limit: number,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  folderId?: number
 ): Promise<{ items: unknown[]; hasMore: boolean; lastId: number | null }> {
   const params = new URLSearchParams({
     projectId: String(projectId),
@@ -138,6 +139,8 @@ export async function fetchDocumentPage(
     limit: String(limit),
     requestedFields: "*",
   });
+  // Server-side folder scoping (confirmed supported as a singular `folderId`).
+  if (folderId != null) params.set("folderId", String(folderId));
   const res = await fetch(`${API_ROOT}/DocumentSeries?${params}`, { headers });
   if (!res.ok) {
     throw new Error(`Failed to fetch documents: ${res.status}`);

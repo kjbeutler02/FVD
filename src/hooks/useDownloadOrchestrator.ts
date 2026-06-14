@@ -3,8 +3,13 @@
 import { useState, useCallback, useRef } from "react";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
-import { downloadFileViaProxy, fetchAllDocuments, buildFolderPath } from "@/lib/api";
-import { DOWNLOAD_CONCURRENCY, MAX_RETRIES } from "@/lib/constants";
+import {
+  downloadFileViaProxy,
+  fetchAllDocuments,
+  fetchDocumentsByFolders,
+  buildFolderPath,
+} from "@/lib/api";
+import { DOWNLOAD_CONCURRENCY, MAX_RETRIES, FOLDER_SCOPED_MAX } from "@/lib/constants";
 import type { DocumentItem } from "@/types/filevine";
 import type { DownloadProgress, FileProgress } from "@/types/download";
 
@@ -60,24 +65,50 @@ export function useDownloadOrchestrator() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // A bounded, specific selection is fetched per-folder (server-scoped) so
+      // we never touch unselected folders. "Select all" (null) and very large
+      // selections fall back to a single project-wide scan.
+      const useFolderScoped =
+        selectedFolderIds != null &&
+        selectedFolderIds.size > 0 &&
+        selectedFolderIds.size <= FOLDER_SCOPED_MAX;
+
       // Phase 1: Scan for documents
       setProgress({
         ...initialProgress(),
         phase: "scanning",
         scanProgress: 0,
-        scanTotal: 0,
+        ...(useFolderScoped
+          ? { scanFoldersDone: 0, scanFoldersTotal: selectedFolderIds!.size }
+          : { scanTotal: 0 }),
       });
 
       let filteredDocs: DocumentItem[];
       try {
-        filteredDocs = await fetchAllDocuments(
-          projectId,
-          (matched, scanned) => {
-            setProgress((prev) => ({ ...prev, scanProgress: matched, scanTotal: scanned }));
-          },
-          selectedFolderIds,
-          controller.signal
-        );
+        if (useFolderScoped) {
+          filteredDocs = await fetchDocumentsByFolders(
+            projectId,
+            selectedFolderIds!,
+            (found, done, total) => {
+              setProgress((prev) => ({
+                ...prev,
+                scanProgress: found,
+                scanFoldersDone: done,
+                scanFoldersTotal: total,
+              }));
+            },
+            controller.signal
+          );
+        } else {
+          filteredDocs = await fetchAllDocuments(
+            projectId,
+            (matched, scanned) => {
+              setProgress((prev) => ({ ...prev, scanProgress: matched, scanTotal: scanned }));
+            },
+            selectedFolderIds,
+            controller.signal
+          );
+        }
       } catch (err) {
         // A cancel/abort is a normal outcome — return to idle, not an error.
         if (cancelledRef.current || (err instanceof DOMException && err.name === "AbortError")) {
