@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Lock, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import Wordmark from "@/components/Wordmark";
 
 interface Props {
   onAuthenticated: () => void;
@@ -41,24 +42,41 @@ export default function PassphraseGate({ onAuthenticated }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8">
-          <div className="text-center mb-6">
-            <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-gray-100 mb-4">
-              <Lock className="text-gray-600" size={24} />
-            </div>
-            <h1 className="text-lg font-semibold text-gray-900">
-              Filevine Project Downloader
-            </h1>
-            <p className="text-sm text-gray-500 mt-1">
-              Sign in to continue
-            </p>
-          </div>
+    <div className="flex min-h-screen flex-col lg:flex-row">
+      {/* Brand panel */}
+      <div className="flex flex-col justify-between bg-brand px-8 py-10 text-white lg:w-[44%] lg:px-14 lg:py-16">
+        <Wordmark variant="on-blue" size="lg" />
 
-          <form onSubmit={handleSubmit}>
-            <div className="mb-3">
-              <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
+        <div className="mt-10 hidden max-w-sm lg:block">
+          <p className="text-2xl font-light leading-snug text-white/90">
+            Noticed. Believed. Remembered.
+          </p>
+          <span className="mt-6 block h-px w-16 bg-white/30" />
+          <p className="mt-6 text-sm font-light leading-relaxed text-white/70">
+            Secure access to firm matter documents. Browse a project&rsquo;s
+            folders and download its files as an organized archive.
+          </p>
+        </div>
+
+        <p className="mt-8 text-[0.7rem] font-medium uppercase tracking-[0.18em] text-white/60 lg:mt-0">
+          Authorized firm personnel only
+        </p>
+      </div>
+
+      {/* Sign-in form */}
+      <div className="flex flex-1 items-center justify-center bg-surface px-6 py-12 sm:px-12">
+        <div className="w-full max-w-sm">
+          <h1 className="text-2xl font-bold text-ink">Sign In</h1>
+          <p className="mt-1.5 text-sm font-light text-muted">
+            Enter your firm credentials to continue.
+          </p>
+
+          <form onSubmit={handleSubmit} className="mt-8">
+            <div className="mb-4">
+              <label
+                htmlFor="username"
+                className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-ink"
+              >
                 Username
               </label>
               <input
@@ -70,15 +88,18 @@ export default function PassphraseGate({ onAuthenticated }: Props) {
                   setError(null);
                 }}
                 placeholder="Enter your username"
-                className="w-full px-4 py-2.5 rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                className="w-full rounded-sm border border-line bg-surface px-3.5 py-2.5 text-sm text-ink placeholder-muted/70 transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand-light/40"
                 disabled={loading}
                 autoFocus
                 autoComplete="username"
               />
             </div>
 
-            <div className="mb-4">
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+            <div className="mb-5">
+              <label
+                htmlFor="password"
+                className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-ink"
+              >
                 Password
               </label>
               <input
@@ -90,28 +111,24 @@ export default function PassphraseGate({ onAuthenticated }: Props) {
                   setError(null);
                 }}
                 placeholder="Enter your password"
-                className="w-full px-4 py-2.5 rounded-lg border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                className="w-full rounded-sm border border-line bg-surface px-3.5 py-2.5 text-sm text-ink placeholder-muted/70 transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand-light/40"
                 disabled={loading}
                 autoComplete="current-password"
               />
             </div>
 
             {error && (
-              <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200">
-                <p className="text-sm text-red-700">{error}</p>
+              <div className="mb-5 rounded-sm border border-error/30 bg-error/5 px-3.5 py-2.5">
+                <p className="text-sm text-error">{error}</p>
               </div>
             )}
 
             <button
               type="submit"
               disabled={loading || !username.trim() || !password}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-blue-600 text-white font-medium text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="flex w-full items-center justify-center gap-2 rounded-sm bg-brand px-4 py-3 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {loading ? (
-                <Loader2 size={18} className="animate-spin" />
-              ) : (
-                "Sign In"
-              )}
+              {loading ? <Loader2 size={18} className="animate-spin" /> : "Sign In"}
             </button>
           </form>
         </div>
