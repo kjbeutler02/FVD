@@ -22,6 +22,7 @@ function initialProgress(): DownloadProgress {
 export function useDownloadOrchestrator() {
   const [progress, setProgress] = useState<DownloadProgress>(initialProgress);
   const cancelledRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const updateFile = useCallback(
     (docId: number, update: Partial<FileProgress>) => {
@@ -56,24 +57,33 @@ export function useDownloadOrchestrator() {
       projectId: number
     ) => {
       cancelledRef.current = false;
+      const controller = new AbortController();
+      abortRef.current = controller;
 
       // Phase 1: Scan for documents
       setProgress({
         ...initialProgress(),
         phase: "scanning",
         scanProgress: 0,
+        scanTotal: 0,
       });
 
       let filteredDocs: DocumentItem[];
       try {
         filteredDocs = await fetchAllDocuments(
           projectId,
-          (count) => {
-            setProgress((prev) => ({ ...prev, scanProgress: count }));
+          (matched, scanned) => {
+            setProgress((prev) => ({ ...prev, scanProgress: matched, scanTotal: scanned }));
           },
-          selectedFolderIds
+          selectedFolderIds,
+          controller.signal
         );
       } catch (err) {
+        // A cancel/abort is a normal outcome — return to idle, not an error.
+        if (cancelledRef.current || (err instanceof DOMException && err.name === "AbortError")) {
+          setProgress((prev) => ({ ...prev, phase: "idle" }));
+          return;
+        }
         setProgress((prev) => ({
           ...prev,
           phase: "error",
@@ -124,7 +134,8 @@ export function useDownloadOrchestrator() {
         folderFlatMap,
         zip,
         updateFile,
-        cancelledRef
+        cancelledRef,
+        controller.signal
       );
 
       if (cancelledRef.current) {
@@ -153,10 +164,15 @@ export function useDownloadOrchestrator() {
 
   const cancel = useCallback(() => {
     cancelledRef.current = true;
+    abortRef.current?.abort();
+    // Surface the cancel immediately, even mid-scan before the loop unwinds.
+    setProgress((prev) => ({ ...prev, phase: "idle" }));
   }, []);
 
   const reset = useCallback(() => {
     cancelledRef.current = false;
+    abortRef.current?.abort();
+    abortRef.current = null;
     setProgress(initialProgress());
   }, []);
 
@@ -168,7 +184,8 @@ async function downloadWithConcurrency(
   folderFlatMap: Record<number, { name: string; parentId: number | null }>,
   zip: JSZip,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
-  cancelledRef: React.RefObject<boolean>
+  cancelledRef: React.RefObject<boolean>,
+  signal: AbortSignal
 ) {
   let active = 0;
   let index = 0;
@@ -183,7 +200,7 @@ async function downloadWithConcurrency(
       while (active < DOWNLOAD_CONCURRENCY && index < docs.length) {
         const doc = docs[index++];
         active++;
-        downloadSingleFile(doc, folderFlatMap, zip, updateFile).finally(() => {
+        downloadSingleFile(doc, folderFlatMap, zip, updateFile, signal).finally(() => {
           active--;
           if (index >= docs.length && active === 0) {
             resolve();
@@ -206,13 +223,14 @@ async function downloadSingleFile(
   doc: DocumentItem,
   folderFlatMap: Record<number, { name: string; parentId: number | null }>,
   zip: JSZip,
-  updateFile: (docId: number, update: Partial<FileProgress>) => void
+  updateFile: (docId: number, update: Partial<FileProgress>) => void,
+  signal: AbortSignal
 ) {
   updateFile(doc.documentId, { status: "downloading" });
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const arrayBuffer = await downloadFileViaProxy(doc.documentId);
+      const arrayBuffer = await downloadFileViaProxy(doc.documentId, signal);
       const folderPath = buildFolderPath(doc.folderId, folderFlatMap);
       const zipPath = folderPath ? `${folderPath}/${doc.filename}` : doc.filename;
 
@@ -220,6 +238,8 @@ async function downloadSingleFile(
       updateFile(doc.documentId, { status: "complete" });
       return;
     } catch (err) {
+      // On cancel, stop quietly — don't retry or flag the file as failed.
+      if (signal.aborted) return;
       if (attempt < MAX_RETRIES) {
         await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
       } else {

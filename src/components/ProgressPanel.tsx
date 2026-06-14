@@ -43,6 +43,7 @@ export default function ProgressPanel({
     files,
     errorMessage,
     scanProgress,
+    scanTotal,
   } = progress;
 
   const percent =
@@ -105,14 +106,19 @@ export default function ProgressPanel({
         {/* Status block */}
         <div className="border-b border-line px-5 py-4">
           {phase === "scanning" ? (
-            <div className="flex items-center gap-2 text-sm text-muted">
-              <Loader2 size={16} className="animate-spin text-brand" />
-              <span>
-                Scanning the project for documents
-                {scanProgress != null && scanProgress > 0
-                  ? ` — ${scanProgress} found`
-                  : "…"}
-              </span>
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-sm text-muted">
+                <Loader2 size={16} className="animate-spin text-brand" />
+                <span>Scanning the project for documents…</span>
+              </div>
+              {scanTotal != null && scanTotal > 0 && (
+                <p className="pl-6 text-xs font-light text-muted">
+                  {scanTotal.toLocaleString()} documents checked
+                  {scanProgress != null && scanProgress !== scanTotal
+                    ? ` · ${scanProgress.toLocaleString()} match your selection`
+                    : ""}
+                </p>
+              )}
             </div>
           ) : (
             <>

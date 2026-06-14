@@ -27,8 +27,8 @@ async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response>
     headers: { ...headers, ...init?.headers },
   });
 
-  // Auto-refresh on 401
-  if (res.status === 401) {
+  // Auto-refresh on 401 (don't retry if the caller already aborted)
+  if (res.status === 401 && !init?.signal?.aborted) {
     await refreshSession();
     const newHeaders = await authHeaders();
     return fetch(url, {
@@ -58,14 +58,15 @@ export async function fetchFolders(projectId: number): Promise<FolderResponse> {
 export async function fetchDocumentPage(
   projectId: number,
   lastId: number = 0,
-  limit: number = 200
+  limit: number = 200,
+  signal?: AbortSignal
 ): Promise<DocumentPage> {
   const params = new URLSearchParams({
     projectId: String(projectId),
     lastId: String(lastId),
     limit: String(limit),
   });
-  const res = await fetchWithAuth(`/api/documents?${params}`);
+  const res = await fetchWithAuth(`/api/documents?${params}`, { signal });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || "Failed to fetch documents");
@@ -75,27 +76,31 @@ export async function fetchDocumentPage(
 
 export async function fetchAllDocuments(
   projectId: number,
-  onProgress?: (loaded: number) => void,
-  folderIds?: Set<number> | null
+  onProgress?: (matched: number, scanned: number) => void,
+  folderIds?: Set<number> | null,
+  signal?: AbortSignal
 ): Promise<DocumentItem[]> {
   const allDocs: DocumentItem[] = [];
   let lastId = 0;
+  let scanned = 0;
   let hasMore = true;
 
   while (hasMore) {
-    const page = await fetchDocumentPage(projectId, lastId, 200);
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+    const page = await fetchDocumentPage(projectId, lastId, 200, signal);
+    scanned += page.items.length;
     // Filter by selected folders if provided
     const filtered = folderIds
       ? page.items.filter((d) => folderIds.has(d.folderId))
       : page.items;
     allDocs.push(...filtered);
-    onProgress?.(allDocs.length);
+    onProgress?.(allDocs.length, scanned);
     hasMore = page.hasMore;
-    if (page.lastId != null) {
-      lastId = page.lastId;
-    } else {
-      break;
-    }
+
+    // Stop if the cursor can't advance, to avoid an infinite scan loop.
+    if (page.lastId == null || page.lastId === lastId) break;
+    lastId = page.lastId;
   }
 
   return allDocs;
@@ -115,11 +120,15 @@ export async function fetchLocators(documentIds: number[]): Promise<LocatorResul
   return data.locators;
 }
 
-export async function downloadFileViaProxy(documentId: number): Promise<ArrayBuffer> {
+export async function downloadFileViaProxy(
+  documentId: number,
+  signal?: AbortSignal
+): Promise<ArrayBuffer> {
   const res = await fetchWithAuth("/api/download", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ documentId }),
+    signal,
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
