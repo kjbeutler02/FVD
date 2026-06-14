@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
   const projectId = params.get("projectId");
   const lastId = params.get("lastId") ?? "0";
   const limit = params.get("limit") ?? "200";
+  const folderId = params.get("folderId");
 
   if (!projectId || isNaN(Number(projectId))) {
     return NextResponse.json({ error: "Valid projectId is required" }, { status: 400 });
@@ -31,7 +32,8 @@ export async function GET(request: NextRequest) {
       Number(projectId),
       Number(lastId),
       Number(limit),
-      headers
+      headers,
+      folderId != null && folderId !== "" ? Number(folderId) : undefined
     );
 
     const items = (page.items as RawDocItem[]).map((doc) => ({

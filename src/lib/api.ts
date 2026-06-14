@@ -1,4 +1,5 @@
 import type { FolderNode, DocumentItem, DocumentPage, LocatorResult } from "@/types/filevine";
+import { FOLDER_SCAN_CONCURRENCY } from "@/lib/constants";
 
 let sessionToken: string | null = null;
 
@@ -59,19 +60,82 @@ export async function fetchDocumentPage(
   projectId: number,
   lastId: number = 0,
   limit: number = 200,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  folderId?: number
 ): Promise<DocumentPage> {
   const params = new URLSearchParams({
     projectId: String(projectId),
     lastId: String(lastId),
     limit: String(limit),
   });
+  if (folderId != null) params.set("folderId", String(folderId));
   const res = await fetchWithAuth(`/api/documents?${params}`, { signal });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || "Failed to fetch documents");
   }
   return res.json();
+}
+
+/** Paginate one folder's documents (server-scoped via folderId). */
+async function fetchDocumentsForFolder(
+  projectId: number,
+  folderId: number,
+  signal?: AbortSignal
+): Promise<DocumentItem[]> {
+  const docs: DocumentItem[] = [];
+  let lastId = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const page = await fetchDocumentPage(projectId, lastId, 200, signal, folderId);
+    docs.push(...page.items);
+    hasMore = page.hasMore;
+    if (page.lastId == null || page.lastId === lastId) break;
+    lastId = page.lastId;
+  }
+
+  return docs;
+}
+
+/**
+ * Fast path for a specific selection: fetch documents for each selected folder
+ * directly (server-scoped), in parallel, instead of scanning the whole project.
+ * The selection set already contains every descendant folder, so this covers
+ * the full subtree. Documents are de-duped by id.
+ */
+export async function fetchDocumentsByFolders(
+  projectId: number,
+  folderIds: Iterable<number>,
+  onProgress?: (found: number, foldersDone: number, foldersTotal: number) => void,
+  signal?: AbortSignal
+): Promise<DocumentItem[]> {
+  const ids = [...folderIds];
+  const all: DocumentItem[] = [];
+  const seen = new Set<number>();
+  let foldersDone = 0;
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < ids.length) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const fid = ids[cursor++];
+      const docs = await fetchDocumentsForFolder(projectId, fid, signal);
+      for (const d of docs) {
+        if (!seen.has(d.documentId)) {
+          seen.add(d.documentId);
+          all.push(d);
+        }
+      }
+      foldersDone++;
+      onProgress?.(all.length, foldersDone, ids.length);
+    }
+  }
+
+  const workerCount = Math.min(FOLDER_SCAN_CONCURRENCY, ids.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return all;
 }
 
 export async function fetchAllDocuments(
