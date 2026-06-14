@@ -1,33 +1,19 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { Loader2 } from "lucide-react";
 import Header from "@/components/Header";
-import StepIndicator from "@/components/StepIndicator";
+import Wordmark from "@/components/Wordmark";
 import ProjectInput from "@/components/ProjectInput";
-import FolderTree from "@/components/FolderTree";
+import DriveView from "@/components/DriveView";
 import ProgressPanel from "@/components/ProgressPanel";
 import PassphraseGate from "@/components/PassphraseGate";
 import { useDownloadOrchestrator } from "@/hooks/useDownloadOrchestrator";
 import { fetchFolders, type FolderResponse } from "@/lib/api";
 import type { FolderNode } from "@/types/filevine";
 
-type Step = 1 | 2 | 3;
-
 export default function Home() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
-  const [step, setStep] = useState<Step>(1);
-
-  // Check if already authenticated (cookie exists) on mount
-  useEffect(() => {
-    fetch("/api/auth", { method: "POST" })
-      .then((res) => {
-        // If we get a response (even an error from Filevine), the middleware let us through
-        setAuthenticated(res.status !== 401);
-      })
-      .catch(() => {
-        setAuthenticated(false);
-      });
-  }, []);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +24,13 @@ export default function Home() {
 
   const { progress, startDownload, cancel, reset } = useDownloadOrchestrator();
 
+  // Check if already authenticated (cookie exists) on mount
+  useEffect(() => {
+    fetch("/api/auth", { method: "POST" })
+      .then((res) => setAuthenticated(res.status !== 401))
+      .catch(() => setAuthenticated(false));
+  }, []);
+
   const handleProjectSubmit = useCallback(async (pid: number) => {
     setLoading(true);
     setError(null);
@@ -47,8 +40,8 @@ export default function Home() {
       const data = await fetchFolders(pid);
       setFolderTree(data.tree);
       setFolderFlatMap(data.flatMap);
-      setStep(2);
     } catch (err) {
+      setProjectId(null);
       setError(err instanceof Error ? err.message : "Failed to load project");
     } finally {
       setLoading(false);
@@ -58,60 +51,76 @@ export default function Home() {
   const handleDownload = useCallback(
     (selectedFolderIds: Set<number> | null) => {
       if (!projectId) return;
-      setStep(3);
       startDownload(folderFlatMap, selectedFolderIds, projectId);
     },
     [projectId, folderFlatMap, startDownload]
   );
 
-  const handleReset = useCallback(() => {
+  // Close the progress drawer but stay in the current project.
+  const handleCloseDrawer = useCallback(() => reset(), [reset]);
+
+  // Return to the project-entry screen.
+  const handleNewProject = useCallback(() => {
     reset();
-    setStep(1);
     setProjectId(null);
     setFolderTree([]);
     setFolderFlatMap({});
     setError(null);
   }, [reset]);
 
-  // Show nothing while checking auth
+  const handleSignOut = useCallback(() => {
+    reset();
+    setProjectId(null);
+    setFolderTree([]);
+    setFolderFlatMap({});
+    setError(null);
+    setAuthenticated(false);
+  }, [reset]);
+
+  // Checking auth — branded splash
   if (authenticated === null) {
-    return <div className="min-h-screen bg-gray-50" />;
+    return (
+      <div className="flex h-dvh flex-col items-center justify-center gap-6 bg-canvas">
+        <Wordmark variant="on-light" size="lg" />
+        <Loader2 size={22} className="animate-spin text-brand" />
+      </div>
+    );
   }
 
-  // Show passphrase gate if not authenticated
   if (!authenticated) {
     return <PassphraseGate onAuthenticated={() => setAuthenticated(true)} />;
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <Header />
-      <main className="flex-1 px-4 pb-12">
-        <StepIndicator currentStep={step} />
+    <div className="flex h-dvh flex-col overflow-hidden bg-canvas">
+      <Header onSignOut={handleSignOut} />
 
-        {step === 1 && (
+      {projectId == null ? (
+        <main className="flex-1 overflow-y-auto">
           <ProjectInput
             onSubmit={handleProjectSubmit}
             loading={loading}
             error={error}
           />
-        )}
-
-        {step === 2 && (
-          <FolderTree
+        </main>
+      ) : (
+        <main className="flex min-h-0 flex-1 flex-col">
+          <DriveView
             tree={folderTree}
+            projectId={projectId}
             onDownload={handleDownload}
           />
-        )}
+        </main>
+      )}
 
-        {step === 3 && (
-          <ProgressPanel
-            progress={progress}
-            onCancel={cancel}
-            onReset={handleReset}
-          />
-        )}
-      </main>
+      {progress.phase !== "idle" && (
+        <ProgressPanel
+          progress={progress}
+          onCancel={cancel}
+          onClose={handleCloseDrawer}
+          onNewProject={handleNewProject}
+        />
+      )}
     </div>
   );
 }
