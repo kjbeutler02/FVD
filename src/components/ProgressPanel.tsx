@@ -185,7 +185,7 @@ export default function ProgressPanel({
             <p className="text-sm text-success">
               Downloaded {completedFiles} {completedFiles === 1 ? "file" : "files"}
               {failedFiles > 0 ? `, ${failedFiles} failed` : ""}. Your ZIP archive
-              is saving now.
+              has been saved.
             </p>
           </div>
         )}

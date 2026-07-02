@@ -39,14 +39,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // Stream the file bytes back to the client
-    const fileBlob = await fileRes.arrayBuffer();
+    // Stream the file bytes back to the client without buffering the whole
+    // file in function memory (concurrent large files OOM the instance).
+    const contentLength = fileRes.headers.get("Content-Length");
 
-    return new Response(fileBlob, {
+    return new Response(fileRes.body, {
       status: 200,
       headers: {
         "Content-Type": fileRes.headers.get("Content-Type") || "application/octet-stream",
-        "Content-Length": String(fileBlob.byteLength),
+        ...(contentLength ? { "Content-Length": contentLength } : {}),
       },
     });
   } catch (err) {
