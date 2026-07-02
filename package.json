@@ -9,9 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "client-zip": "^2.5.0",
     "file-saver": "^2.0.5",
     "jose": "^6.2.2",
-    "jszip": "^3.10.1",
     "lucide-react": "^1.7.0",
     "next": "16.2.2",
     "react": "19.2.4",

@@ -187,7 +187,7 @@ export async function fetchLocators(documentIds: number[]): Promise<LocatorResul
 export async function downloadFileViaProxy(
   documentId: number,
   signal?: AbortSignal
-): Promise<ArrayBuffer> {
+): Promise<Blob> {
   const res = await fetchWithAuth("/api/download", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -198,7 +198,9 @@ export async function downloadFileViaProxy(
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Download failed for doc ${documentId}`);
   }
-  return res.arrayBuffer();
+  // Blob (not ArrayBuffer) so the browser can spill large files to disk
+  // instead of holding every byte in JS heap memory.
+  return res.blob();
 }
 
 export function buildFolderPath(

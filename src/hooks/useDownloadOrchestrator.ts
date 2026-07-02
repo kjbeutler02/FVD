@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
-import JSZip from "jszip";
+import { downloadZip } from "client-zip";
 import { saveAs } from "file-saver";
 import {
   downloadFileViaProxy,
@@ -12,6 +12,16 @@ import {
 import { DOWNLOAD_CONCURRENCY, MAX_RETRIES, FOLDER_SCOPED_MAX } from "@/lib/constants";
 import type { DocumentItem } from "@/types/filevine";
 import type { DownloadProgress, FileProgress } from "@/types/download";
+
+// showSaveFilePicker is Chromium-only and not yet in lib.dom.
+declare global {
+  interface Window {
+    showSaveFilePicker?: (options?: {
+      suggestedName?: string;
+      types?: { description?: string; accept: Record<string, string[]> }[];
+    }) => Promise<FileSystemFileHandle>;
+  }
+}
 
 function initialProgress(): DownloadProgress {
   return {
@@ -64,6 +74,31 @@ export function useDownloadOrchestrator() {
       cancelledRef.current = false;
       const controller = new AbortController();
       abortRef.current = controller;
+
+      // Ask for the save location up front, while we still have the click's
+      // user activation (the picker is blocked once the scan has been running
+      // for a while). Streaming the ZIP to disk keeps memory flat no matter
+      // how large the project is; browsers without the picker fall back to
+      // an in-memory Blob save.
+      const zipName = `filevine-project-${projectId}.zip`;
+      let fileHandle: FileSystemFileHandle | null = null;
+      if (window.showSaveFilePicker) {
+        try {
+          fileHandle = await window.showSaveFilePicker({
+            suggestedName: zipName,
+            types: [
+              { description: "ZIP archive", accept: { "application/zip": [".zip"] } },
+            ],
+          });
+        } catch (err) {
+          // Picker dismissed — treat as cancel.
+          if (err instanceof DOMException && err.name === "AbortError") {
+            setProgress(initialProgress());
+            return;
+          }
+          fileHandle = null; // blocked/unsupported — fall back to Blob save
+        }
+      }
 
       // A bounded, specific selection is fetched per-folder (server-scoped) so
       // we never touch unselected folders. "Select all" (null) and very large
@@ -137,7 +172,7 @@ export function useDownloadOrchestrator() {
         return;
       }
 
-      // Phase 2: Download files
+      // Phase 2: Download files, streaming each into the ZIP as it completes.
       const files = new Map<number, FileProgress>();
       for (const doc of filteredDocs) {
         const folderPath = buildFolderPath(doc.folderId, folderFlatMap);
@@ -158,35 +193,40 @@ export function useDownloadOrchestrator() {
         phase: "downloading",
       });
 
-      const zip = new JSZip();
-
-      await downloadWithConcurrency(
+      const entries = zipEntries(
         filteredDocs,
         folderFlatMap,
-        zip,
         updateFile,
         cancelledRef,
         controller.signal
       );
-
-      if (cancelledRef.current) {
-        setProgress((prev) => ({ ...prev, phase: "idle" }));
-        return;
-      }
-
-      // Phase 3: Generate ZIP
-      setProgress((prev) => ({ ...prev, phase: "zipping", currentFile: null }));
+      const zipResponse = downloadZip(entries);
 
       try {
-        const blob = await zip.generateAsync({ type: "blob" });
-        saveAs(blob, `filevine-project-${projectId}.zip`);
-        setProgress((prev) => ({ ...prev, phase: "complete" }));
+        if (fileHandle) {
+          const writable = await fileHandle.createWritable();
+          // pipeTo aborts the writable on cancel, discarding the partial file.
+          await zipResponse.body!.pipeTo(writable, { signal: controller.signal });
+        } else {
+          setProgress((prev) => ({ ...prev, phase: "zipping", currentFile: null }));
+          const blob = await zipResponse.blob();
+          if (cancelledRef.current) {
+            setProgress((prev) => ({ ...prev, phase: "idle" }));
+            return;
+          }
+          saveAs(blob, zipName);
+        }
+        setProgress((prev) => ({ ...prev, phase: "complete", currentFile: null }));
       } catch (err) {
+        if (cancelledRef.current || (err instanceof DOMException && err.name === "AbortError")) {
+          setProgress((prev) => ({ ...prev, phase: "idle" }));
+          return;
+        }
         setProgress((prev) => ({
           ...prev,
           phase: "error",
           errorMessage:
-            err instanceof Error ? err.message : "Failed to generate ZIP file",
+            err instanceof Error ? err.message : "Failed to save ZIP file",
         }));
       }
     },
@@ -210,67 +250,67 @@ export function useDownloadOrchestrator() {
   return { progress, startDownload, cancel, reset };
 }
 
-async function downloadWithConcurrency(
+interface ZipEntry {
+  name: string;
+  input: Blob;
+}
+
+/**
+ * Yields downloaded files in document order while keeping up to
+ * DOWNLOAD_CONCURRENCY fetches in flight, so the ZIP stream consumes each
+ * file as soon as it (and everything before it) is ready. Failed files are
+ * marked in the progress map and skipped rather than aborting the archive.
+ */
+async function* zipEntries(
   docs: DocumentItem[],
   folderFlatMap: Record<number, { name: string; parentId: number | null }>,
-  zip: JSZip,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
   cancelledRef: React.RefObject<boolean>,
   signal: AbortSignal
-) {
-  let active = 0;
-  let index = 0;
+): AsyncGenerator<ZipEntry> {
+  const usedPaths = new Set<string>();
+  const inFlight: Promise<ZipEntry | null>[] = [];
+  let next = 0;
 
-  return new Promise<void>((resolve) => {
-    function next() {
-      if (cancelledRef.current) {
-        if (active === 0) resolve();
-        return;
-      }
-
-      while (active < DOWNLOAD_CONCURRENCY && index < docs.length) {
-        const doc = docs[index++];
-        active++;
-        downloadSingleFile(doc, folderFlatMap, zip, updateFile, signal).finally(() => {
-          active--;
-          if (index >= docs.length && active === 0) {
-            resolve();
-          } else {
-            next();
-          }
-        });
-      }
-
-      if (index >= docs.length && active === 0) {
-        resolve();
-      }
+  while (next < docs.length || inFlight.length > 0) {
+    if (cancelledRef.current || signal.aborted) {
+      throw new DOMException("Aborted", "AbortError");
     }
 
-    next();
-  });
+    while (inFlight.length < DOWNLOAD_CONCURRENCY && next < docs.length) {
+      inFlight.push(
+        downloadSingleFile(docs[next++], folderFlatMap, usedPaths, updateFile, signal)
+      );
+    }
+
+    const entry = await inFlight.shift()!;
+    if (entry) yield entry;
+  }
 }
 
 async function downloadSingleFile(
   doc: DocumentItem,
   folderFlatMap: Record<number, { name: string; parentId: number | null }>,
-  zip: JSZip,
+  usedPaths: Set<string>,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
   signal: AbortSignal
-) {
+): Promise<ZipEntry | null> {
   updateFile(doc.documentId, { status: "downloading" });
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const arrayBuffer = await downloadFileViaProxy(doc.documentId, signal);
+      const blob = await downloadFileViaProxy(doc.documentId, signal);
       const folderPath = buildFolderPath(doc.folderId, folderFlatMap);
-      const zipPath = folderPath ? `${folderPath}/${doc.filename}` : doc.filename;
+      const zipPath = uniquePath(
+        folderPath ? `${folderPath}/${doc.filename}` : doc.filename,
+        usedPaths
+      );
 
-      zip.file(zipPath, arrayBuffer);
       updateFile(doc.documentId, { status: "complete" });
-      return;
+      return { name: zipPath, input: blob };
     } catch (err) {
       // On cancel, stop quietly — don't retry or flag the file as failed.
-      if (signal.aborted) return;
+      if (signal.aborted) return null;
       if (attempt < MAX_RETRIES) {
         await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
       } else {
@@ -279,6 +319,29 @@ async function downloadSingleFile(
           error: err instanceof Error ? err.message : "Download failed",
         });
       }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Duplicate filenames in the same folder would collide in the archive
+ * (previously JSZip silently overwrote them) — suffix repeats instead.
+ */
+function uniquePath(path: string, usedPaths: Set<string>): string {
+  if (!usedPaths.has(path)) {
+    usedPaths.add(path);
+    return path;
+  }
+  const dot = path.lastIndexOf(".");
+  const stem = dot > 0 ? path.slice(0, dot) : path;
+  const ext = dot > 0 ? path.slice(dot) : "";
+  for (let n = 2; ; n++) {
+    const candidate = `${stem} (${n})${ext}`;
+    if (!usedPaths.has(candidate)) {
+      usedPaths.add(candidate);
+      return candidate;
     }
   }
 }
