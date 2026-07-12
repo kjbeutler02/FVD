@@ -1,22 +1,26 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import {
   ChevronRight,
   ChevronDown,
   ChevronLeft,
+  File,
   Folder,
   FolderOpen,
   Folders,
   Check,
   Minus,
   Download,
+  Loader2,
   Search,
   LayoutGrid,
   List as ListIcon,
   X,
 } from "lucide-react";
-import type { FolderNode } from "@/types/filevine";
+import { fetchDocumentsForFolder } from "@/lib/api";
+import type { DocumentItem, FolderNode } from "@/types/filevine";
+import type { DownloadSelection } from "@/types/download";
 
 type CheckState = "checked" | "unchecked" | "indeterminate";
 type ViewMode = "list" | "grid";
@@ -24,7 +28,7 @@ type ViewMode = "list" | "grid";
 interface Props {
   tree: FolderNode[];
   projectId: number;
-  onDownload: (selectedFolderIds: Set<number> | null) => void;
+  onDownload: (selection: DownloadSelection) => void;
 }
 
 /* ---------------------------------------------------------------- helpers */
@@ -81,7 +85,54 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
   const [view, setView] = useState<ViewMode>("list");
   const [query, setQuery] = useState("");
 
+  // Documents loaded per folder (fetched when a folder is opened), plus the
+  // per-document overrides on top of the folder-level selection.
+  const [docsByFolder, setDocsByFolder] = useState<Map<number, DocumentItem[]>>(
+    () => new Map()
+  );
+  const [docsLoading, setDocsLoading] = useState<Set<number>>(() => new Set());
+  const [docsError, setDocsError] = useState<string | null>(null);
+  const [extraDocs, setExtraDocs] = useState<Map<number, DocumentItem>>(
+    () => new Map()
+  );
+  const [excludedDocs, setExcludedDocs] = useState<Map<number, DocumentItem>>(
+    () => new Map()
+  );
+  const [convertPdf, setConvertPdf] = useState(false);
+
   const searching = query.trim().length > 0;
+
+  // Load a folder's documents once, on first visit. A ref (not state) tracks
+  // requested folders so the effect never re-fires for its own state updates.
+  const requestedDocsRef = useRef<Set<number>>(new Set());
+  const loadDocs = useCallback(
+    (fid: number) => {
+      if (requestedDocsRef.current.has(fid)) return;
+      requestedDocsRef.current.add(fid);
+
+      setDocsLoading((prev) => new Set(prev).add(fid));
+      setDocsError(null);
+
+      fetchDocumentsForFolder(projectId, fid)
+        .then((docs) => {
+          setDocsByFolder((prev) => new Map(prev).set(fid, docs));
+        })
+        .catch((err) => {
+          requestedDocsRef.current.delete(fid); // allow retry
+          setDocsError(
+            err instanceof Error ? err.message : "Failed to load documents"
+          );
+        })
+        .finally(() => {
+          setDocsLoading((prev) => {
+            const next = new Set(prev);
+            next.delete(fid);
+            return next;
+          });
+        });
+    },
+    [projectId]
+  );
 
   const childrenOf = useCallback(
     (id: number | null): FolderNode[] =>
@@ -111,13 +162,18 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
     return childrenOf(currentFolderId);
   }, [searching, query, tree, childrenOf, currentFolderId]);
 
-  const allSelected = selected.size === allIds.size && allIds.size > 0;
-  const noneSelected = selected.size === 0;
+  const allFoldersSelected = selected.size === allIds.size && allIds.size > 0;
+  const allSelected = allFoldersSelected && excludedDocs.size === 0;
+  const noneSelected = selected.size === 0 && extraDocs.size === 0;
 
-  const navigate = useCallback((id: number | null) => {
-    setCurrentFolderId(id);
-    setQuery("");
-  }, []);
+  const navigate = useCallback(
+    (id: number | null) => {
+      setCurrentFolderId(id);
+      setQuery("");
+      if (id != null) loadDocs(id);
+    },
+    [loadDocs]
+  );
 
   const toggleExpand = useCallback((id: number) => {
     setExpanded((prev) => {
@@ -128,26 +184,116 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
     });
   }, []);
 
-  const toggleSelect = useCallback((node: FolderNode) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      const descendants = getDescendantIds(node);
-      const state = checkState(node, prev);
-      if (state === "checked") {
-        for (const id of descendants) next.delete(id);
-      } else {
-        for (const id of descendants) next.add(id);
+  /** Drop override entries for documents living in any of the given folders. */
+  const pruneOverrides = (
+    prev: Map<number, DocumentItem>,
+    folderIds: Set<number>
+  ): Map<number, DocumentItem> => {
+    let changed = false;
+    const next = new Map(prev);
+    for (const [id, doc] of prev) {
+      if (folderIds.has(doc.folderId)) {
+        next.delete(id);
+        changed = true;
       }
-      return next;
-    });
-  }, []);
+    }
+    return changed ? next : prev;
+  };
 
-  const selectAll = () => setSelected(new Set(allIds));
-  const clearAll = () => setSelected(new Set());
+  /** Folder check state including per-document overrides in its subtree. */
+  const nodeState = useCallback(
+    (node: FolderNode): CheckState => {
+      const base = checkState(node, selected);
+      const descendants = getDescendantIds(node);
+      if (base === "checked") {
+        for (const doc of excludedDocs.values()) {
+          if (descendants.has(doc.folderId)) return "indeterminate";
+        }
+        return "checked";
+      }
+      if (base === "unchecked") {
+        for (const doc of extraDocs.values()) {
+          if (descendants.has(doc.folderId)) return "indeterminate";
+        }
+        return "unchecked";
+      }
+      return "indeterminate";
+    },
+    [selected, extraDocs, excludedDocs]
+  );
+
+  const toggleSelect = useCallback(
+    (node: FolderNode) => {
+      const descendants = getDescendantIds(node);
+      const state = nodeState(node);
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (state === "checked") {
+          for (const id of descendants) next.delete(id);
+        } else {
+          for (const id of descendants) next.add(id);
+        }
+        return next;
+      });
+      // The folder-level action wins over any per-document overrides beneath it.
+      setExtraDocs((prev) => pruneOverrides(prev, descendants));
+      setExcludedDocs((prev) => pruneOverrides(prev, descendants));
+    },
+    [nodeState]
+  );
+
+  const isDocChecked = useCallback(
+    (doc: DocumentItem): boolean =>
+      selected.has(doc.folderId)
+        ? !excludedDocs.has(doc.documentId)
+        : extraDocs.has(doc.documentId),
+    [selected, extraDocs, excludedDocs]
+  );
+
+  const toggleDoc = useCallback(
+    (doc: DocumentItem) => {
+      const setter = selected.has(doc.folderId) ? setExcludedDocs : setExtraDocs;
+      setter((prev) => {
+        const next = new Map(prev);
+        if (next.has(doc.documentId)) next.delete(doc.documentId);
+        else next.set(doc.documentId, doc);
+        return next;
+      });
+    },
+    [selected]
+  );
+
+  const selectAll = () => {
+    setSelected(new Set(allIds));
+    setExtraDocs(new Map());
+    setExcludedDocs(new Map());
+  };
+  const clearAll = () => {
+    setSelected(new Set());
+    setExtraDocs(new Map());
+    setExcludedDocs(new Map());
+  };
 
   const handleDownload = () => {
-    if (allIds.size === 0 || allSelected) onDownload(null);
-    else onDownload(selected);
+    if (allIds.size === 0 || allSelected) {
+      onDownload({
+        folderIds: null,
+        extraDocs: [],
+        excludedDocIds: new Set(),
+        convertPdfToMd: convertPdf,
+      });
+      return;
+    }
+    onDownload({
+      folderIds: new Set(selected),
+      extraDocs: [...extraDocs.values()].filter((d) => !selected.has(d.folderId)),
+      excludedDocIds: new Set(
+        [...excludedDocs.values()]
+          .filter((d) => selected.has(d.folderId))
+          .map((d) => d.documentId)
+      ),
+      convertPdfToMd: convertPdf,
+    });
   };
 
   const pathLabel = (node: FolderNode): string => {
@@ -162,7 +308,13 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
     return parts.length ? parts.join(" / ") : "All Folders";
   };
 
-  const canDownload = allIds.size === 0 || selected.size > 0;
+  const canDownload = allIds.size === 0 || selected.size > 0 || extraDocs.size > 0;
+
+  // Documents of the folder currently open in the main area.
+  const currentDocs =
+    currentFolderId != null ? docsByFolder.get(currentFolderId) : undefined;
+  const loadingDocs =
+    currentFolderId != null && docsLoading.has(currentFolderId);
 
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-1 overflow-hidden">
@@ -228,7 +380,13 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
             <p className="truncate text-xs font-light text-muted">
               {searching
                 ? `${items.length} ${items.length === 1 ? "match" : "matches"}`
-                : `${items.length} ${items.length === 1 ? "folder" : "folders"}`}
+                : `${items.length} ${items.length === 1 ? "folder" : "folders"}${
+                    currentFolderId != null && currentDocs
+                      ? ` · ${currentDocs.length} ${
+                          currentDocs.length === 1 ? "document" : "documents"
+                        }`
+                      : ""
+                  }`}
             </p>
 
             <div className="flex items-center gap-2">
@@ -278,36 +436,93 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
-          {items.length === 0 ? (
-            <EmptyState searching={searching} query={query} hasFolders={allIds.size > 0} />
-          ) : view === "grid" ? (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-3">
-              {items.map((node) => (
-                <FolderCard
-                  key={node.id}
-                  node={node}
-                  state={checkState(node, selected)}
-                  subtitle={searching ? pathLabel(node) : undefined}
-                  onOpen={() => navigate(node.id)}
-                  onToggle={() => toggleSelect(node)}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-md border border-line bg-surface">
-              {items.map((node, i) => (
-                <FolderRow
-                  key={node.id}
-                  node={node}
-                  state={checkState(node, selected)}
-                  subtitle={searching ? pathLabel(node) : undefined}
-                  first={i === 0}
-                  onOpen={() => navigate(node.id)}
-                  onToggle={() => toggleSelect(node)}
-                />
-              ))}
+          {items.length > 0 &&
+            (view === "grid" ? (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-3">
+                {items.map((node) => (
+                  <FolderCard
+                    key={node.id}
+                    node={node}
+                    state={nodeState(node)}
+                    subtitle={searching ? pathLabel(node) : undefined}
+                    onOpen={() => navigate(node.id)}
+                    onToggle={() => toggleSelect(node)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-md border border-line bg-surface">
+                {items.map((node, i) => (
+                  <FolderRow
+                    key={node.id}
+                    node={node}
+                    state={nodeState(node)}
+                    subtitle={searching ? pathLabel(node) : undefined}
+                    first={i === 0}
+                    onOpen={() => navigate(node.id)}
+                    onToggle={() => toggleSelect(node)}
+                  />
+                ))}
+              </div>
+            ))}
+
+          {/* Documents in the open folder */}
+          {!searching && currentFolderId != null && (
+            <div className={items.length > 0 ? "mt-5" : ""}>
+              {loadingDocs ? (
+                <div className="flex items-center gap-2 px-1 py-3 text-sm font-light text-muted">
+                  <Loader2 size={15} className="animate-spin" />
+                  Loading documents…
+                </div>
+              ) : docsError ? (
+                <div className="flex items-center gap-3 rounded-md border border-line bg-surface px-4 py-3 text-sm">
+                  <span className="text-muted">{docsError}</span>
+                  <button
+                    type="button"
+                    onClick={() => loadDocs(currentFolderId)}
+                    className="font-medium text-brand hover:text-brand-dark"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : currentDocs && currentDocs.length > 0 ? (
+                <>
+                  <p className="mb-2 px-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-muted">
+                    Documents
+                  </p>
+                  <div className="overflow-hidden rounded-md border border-line bg-surface">
+                    {currentDocs.map((doc, i) => (
+                      <DocRow
+                        key={doc.documentId}
+                        doc={doc}
+                        checked={isDocChecked(doc)}
+                        first={i === 0}
+                        onToggle={() => toggleDoc(doc)}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : null}
             </div>
           )}
+
+          {/* Empty states */}
+          {searching && items.length === 0 && (
+            <EmptyState searching query={query} hasFolders={allIds.size > 0} />
+          )}
+          {!searching &&
+            items.length === 0 &&
+            (currentFolderId == null ? (
+              allIds.size === 0 && (
+                <EmptyState searching={false} query="" hasFolders={false} />
+              )
+            ) : (
+              !loadingDocs &&
+              !docsError &&
+              (currentDocs?.length ?? 0) === 0 && (
+                <EmptyState searching={false} query="" hasFolders={allIds.size > 0} />
+              )
+            ))}
         </div>
 
         {/* Selection / download bar */}
@@ -318,7 +533,11 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
                 ? "Whole project"
                 : allSelected
                 ? "All folders selected"
-                : `${selected.size} of ${allIds.size} selected`}
+                : `${selected.size} of ${allIds.size} folders${
+                    extraDocs.size > 0 ? ` +${extraDocs.size} ${extraDocs.size === 1 ? "file" : "files"}` : ""
+                  }${
+                    excludedDocs.size > 0 ? ` −${excludedDocs.size} ${excludedDocs.size === 1 ? "file" : "files"}` : ""
+                  }`}
             </span>
             {allIds.size > 0 && (
               <div className="flex items-center gap-3 text-xs font-medium uppercase tracking-wider">
@@ -343,15 +562,25 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={handleDownload}
-            disabled={!canDownload}
-            className="flex items-center justify-center gap-2 rounded-sm bg-brand px-5 py-2.5 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Download size={17} />
-            Download as ZIP
-          </button>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-5">
+            <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-ink">
+              <Checkbox
+                state={convertPdf ? "checked" : "unchecked"}
+                onToggle={() => setConvertPdf((v) => !v)}
+              />
+              Convert PDFs to Markdown
+            </label>
+
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={!canDownload}
+              className="flex items-center justify-center gap-2 rounded-sm bg-brand px-5 py-2.5 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Download size={17} />
+              Download as ZIP
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -442,6 +671,42 @@ function FolderRow({
           size={16}
           className="shrink-0 text-muted/50 transition-colors group-hover:text-muted"
         />
+      </button>
+    </div>
+  );
+}
+
+function DocRow({
+  doc,
+  checked,
+  first,
+  onToggle,
+}: {
+  doc: DocumentItem;
+  checked: boolean;
+  first: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div
+      className={`group flex items-center gap-3 px-3 py-2.5 transition-colors sm:px-4 ${
+        first ? "" : "border-t border-line"
+      } ${checked ? "bg-brand-tint" : "hover:bg-canvas"}`}
+    >
+      <Checkbox state={checked ? "checked" : "unchecked"} onToggle={onToggle} />
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+      >
+        <File
+          size={18}
+          strokeWidth={1.75}
+          className={checked ? "shrink-0 text-brand" : "shrink-0 text-muted"}
+        />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
+          {doc.filename}
+        </span>
       </button>
     </div>
   );
@@ -615,10 +880,9 @@ function EmptyState({
         </>
       ) : (
         <>
-          <p className="mt-4 text-sm font-medium text-ink">No subfolders here</p>
+          <p className="mt-4 text-sm font-medium text-ink">This folder is empty</p>
           <p className="mt-1 max-w-sm text-sm font-light text-muted">
-            This folder has no subfolders. Its documents are still included when
-            the folder is selected.
+            No documents or subfolders here.
           </p>
         </>
       )}

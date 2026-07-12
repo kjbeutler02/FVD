@@ -78,7 +78,7 @@ export async function fetchDocumentPage(
 }
 
 /** Paginate one folder's documents (server-scoped via folderId). */
-async function fetchDocumentsForFolder(
+export async function fetchDocumentsForFolder(
   projectId: number,
   folderId: number,
   signal?: AbortSignal

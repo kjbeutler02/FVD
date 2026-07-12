@@ -10,8 +10,9 @@ import {
   buildFolderPath,
 } from "@/lib/api";
 import { DOWNLOAD_CONCURRENCY, MAX_RETRIES, FOLDER_SCOPED_MAX } from "@/lib/constants";
+import { pdfBlobToMarkdown, isPdfFilename, markdownFilename } from "@/lib/pdfToMarkdown";
 import type { DocumentItem } from "@/types/filevine";
-import type { DownloadProgress, FileProgress } from "@/types/download";
+import type { DownloadProgress, DownloadSelection, FileProgress } from "@/types/download";
 
 // showSaveFilePicker is Chromium-only and not yet in lib.dom.
 declare global {
@@ -68,9 +69,10 @@ export function useDownloadOrchestrator() {
   const startDownload = useCallback(
     async (
       folderFlatMap: Record<number, { name: string; parentId: number | null }>,
-      selectedFolderIds: Set<number> | null,
+      selection: DownloadSelection,
       projectId: number
     ) => {
+      const { folderIds: selectedFolderIds, extraDocs, excludedDocIds, convertPdfToMd } = selection;
       cancelledRef.current = false;
       const controller = new AbortController();
       abortRef.current = controller;
@@ -102,7 +104,9 @@ export function useDownloadOrchestrator() {
 
       // A bounded, specific selection is fetched per-folder (server-scoped) so
       // we never touch unselected folders. "Select all" (null) and very large
-      // selections fall back to a single project-wide scan.
+      // selections fall back to a single project-wide scan. A selection of
+      // individual documents only (no folders) needs no scan at all.
+      const skipScan = selectedFolderIds != null && selectedFolderIds.size === 0;
       const useFolderScoped =
         selectedFolderIds != null &&
         selectedFolderIds.size > 0 &&
@@ -120,7 +124,9 @@ export function useDownloadOrchestrator() {
 
       let filteredDocs: DocumentItem[];
       try {
-        if (useFolderScoped) {
+        if (skipScan) {
+          filteredDocs = [];
+        } else if (useFolderScoped) {
           filteredDocs = await fetchDocumentsByFolders(
             projectId,
             selectedFolderIds!,
@@ -163,6 +169,19 @@ export function useDownloadOrchestrator() {
         return;
       }
 
+      // Apply the document-level overrides: drop individually deselected
+      // documents, then add individually selected ones (de-duped by id).
+      if (excludedDocIds.size > 0) {
+        filteredDocs = filteredDocs.filter((d) => !excludedDocIds.has(d.documentId));
+      }
+      const included = new Set(filteredDocs.map((d) => d.documentId));
+      for (const doc of extraDocs) {
+        if (!included.has(doc.documentId)) {
+          included.add(doc.documentId);
+          filteredDocs.push(doc);
+        }
+      }
+
       if (filteredDocs.length === 0) {
         setProgress((prev) => ({
           ...prev,
@@ -198,7 +217,8 @@ export function useDownloadOrchestrator() {
         folderFlatMap,
         updateFile,
         cancelledRef,
-        controller.signal
+        controller.signal,
+        convertPdfToMd
       );
       const zipResponse = downloadZip(entries);
 
@@ -266,7 +286,8 @@ async function* zipEntries(
   folderFlatMap: Record<number, { name: string; parentId: number | null }>,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
   cancelledRef: React.RefObject<boolean>,
-  signal: AbortSignal
+  signal: AbortSignal,
+  convertPdfToMd: boolean
 ): AsyncGenerator<ZipEntry> {
   const usedPaths = new Set<string>();
   const inFlight: Promise<ZipEntry | null>[] = [];
@@ -279,7 +300,14 @@ async function* zipEntries(
 
     while (inFlight.length < DOWNLOAD_CONCURRENCY && next < docs.length) {
       inFlight.push(
-        downloadSingleFile(docs[next++], folderFlatMap, usedPaths, updateFile, signal)
+        downloadSingleFile(
+          docs[next++],
+          folderFlatMap,
+          usedPaths,
+          updateFile,
+          signal,
+          convertPdfToMd
+        )
       );
     }
 
@@ -293,16 +321,29 @@ async function downloadSingleFile(
   folderFlatMap: Record<number, { name: string; parentId: number | null }>,
   usedPaths: Set<string>,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
-  signal: AbortSignal
+  signal: AbortSignal,
+  convertPdfToMd: boolean
 ): Promise<ZipEntry | null> {
   updateFile(doc.documentId, { status: "downloading" });
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const blob = await downloadFileViaProxy(doc.documentId, signal);
+      let blob = await downloadFileViaProxy(doc.documentId, signal);
+      let filename = doc.filename;
+
+      // Replace the PDF with its extracted Markdown. Scanned/encrypted PDFs
+      // with no usable text layer keep the original file instead.
+      if (convertPdfToMd && isPdfFilename(doc.filename)) {
+        const markdown = await pdfBlobToMarkdown(blob, doc.filename);
+        if (markdown != null) {
+          blob = new Blob([markdown], { type: "text/markdown" });
+          filename = markdownFilename(doc.filename);
+        }
+      }
+
       const folderPath = buildFolderPath(doc.folderId, folderFlatMap);
       const zipPath = uniquePath(
-        folderPath ? `${folderPath}/${doc.filename}` : doc.filename,
+        folderPath ? `${folderPath}/${filename}` : filename,
         usedPaths
       );
 
