@@ -10,7 +10,7 @@ import {
   buildFolderPath,
 } from "@/lib/api";
 import { DOWNLOAD_CONCURRENCY, MAX_RETRIES, FOLDER_SCOPED_MAX } from "@/lib/constants";
-import { pdfBlobToMarkdown, isPdfFilename, markdownFilename } from "@/lib/pdfToMarkdown";
+import { convertToMarkdown, isConvertible, markdownFilename } from "@/lib/toMarkdown";
 import type { DocumentItem } from "@/types/filevine";
 import type { DownloadProgress, DownloadSelection, FileProgress } from "@/types/download";
 
@@ -72,7 +72,7 @@ export function useDownloadOrchestrator() {
       selection: DownloadSelection,
       projectId: number
     ) => {
-      const { folderIds: selectedFolderIds, extraDocs, excludedDocIds, convertPdfToMd } = selection;
+      const { folderIds: selectedFolderIds, extraDocs, excludedDocIds, convertToMd } = selection;
       cancelledRef.current = false;
       const controller = new AbortController();
       abortRef.current = controller;
@@ -218,7 +218,7 @@ export function useDownloadOrchestrator() {
         updateFile,
         cancelledRef,
         controller.signal,
-        convertPdfToMd
+        convertToMd
       );
       const zipResponse = downloadZip(entries);
 
@@ -287,7 +287,7 @@ async function* zipEntries(
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
   cancelledRef: React.RefObject<boolean>,
   signal: AbortSignal,
-  convertPdfToMd: boolean
+  convertToMd: boolean
 ): AsyncGenerator<ZipEntry> {
   const usedPaths = new Set<string>();
   const inFlight: Promise<ZipEntry | null>[] = [];
@@ -306,7 +306,7 @@ async function* zipEntries(
           usedPaths,
           updateFile,
           signal,
-          convertPdfToMd
+          convertToMd
         )
       );
     }
@@ -322,7 +322,7 @@ async function downloadSingleFile(
   usedPaths: Set<string>,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
   signal: AbortSignal,
-  convertPdfToMd: boolean
+  convertToMd: boolean
 ): Promise<ZipEntry | null> {
   updateFile(doc.documentId, { status: "downloading" });
 
@@ -331,10 +331,11 @@ async function downloadSingleFile(
       let blob = await downloadFileViaProxy(doc.documentId, signal);
       let filename = doc.filename;
 
-      // Replace the PDF with its extracted Markdown. Scanned/encrypted PDFs
-      // with no usable text layer keep the original file instead.
-      if (convertPdfToMd && isPdfFilename(doc.filename)) {
-        const markdown = await pdfBlobToMarkdown(blob, doc.filename);
+      // Replace convertible documents (PDF, Word, text, CSV, …) with their
+      // extracted Markdown. Files with no usable text (scanned PDFs, corrupt
+      // or encrypted documents) keep the original file instead.
+      if (convertToMd && isConvertible(doc.filename)) {
+        const markdown = await convertToMarkdown(blob, doc.filename);
         if (markdown != null) {
           blob = new Blob([markdown], { type: "text/markdown" });
           filename = markdownFilename(doc.filename);

@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { getAccessToken, getOrgAndUserIds } from "@/lib/filevine";
 import { createSessionToken } from "@/lib/session";
 
 export async function POST() {
+  // Only Entra-authenticated users may obtain a Filevine session token.
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const pat = process.env.FILEVINE_PAT;
   const clientId = process.env.FILEVINE_CLIENT_ID;
   const clientSecret = process.env.FILEVINE_CLIENT_SECRET;

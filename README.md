@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# FVD — Filevine Document Downloader
 
-## Getting Started
+Internal Strong & Hanni tool. Browse a Filevine project's folders, select
+folders and/or individual documents, and download them as a ZIP — optionally
+converting documents (PDF, Word, text, CSV, …) to Markdown on the way.
 
-First, run the development server:
+Sign-in uses **Microsoft Entra ID** (the firm's M365 tenant) via Auth.js.
+
+## Development
 
 ```bash
+npm install
+cp .env.local.example .env.local   # fill in the values below
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment variables
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+See [.env.local.example](.env.local.example). For production, set the same
+variables in **Vercel → Project Settings → Environment Variables**.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Variable | Purpose |
+| --- | --- |
+| `AUTH_SECRET` | Auth.js session encryption (`openssl rand -base64 32`) |
+| `AUTH_MICROSOFT_ENTRA_ID_ID` | Entra app registration → Application (client) ID |
+| `AUTH_MICROSOFT_ENTRA_ID_SECRET` | Entra app registration → client secret value |
+| `AUTH_MICROSOFT_ENTRA_ID_ISSUER` | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
+| `FILEVINE_PAT` | Filevine personal access token |
+| `FILEVINE_CLIENT_ID` / `FILEVINE_CLIENT_SECRET` | Filevine API client |
+| `SESSION_SECRET` | Signs the short-lived internal Filevine session JWT |
 
-## Learn More
+`AUTH_SECRET` must be set in production or sessions silently fail.
 
-To learn more about Next.js, take a look at the following resources:
+## Entra app registration (one-time setup)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Azure Portal → **Microsoft Entra ID** → **App registrations** → **New registration**.
+2. Name it (e.g. `FVD — Filevine Downloader`).
+3. **Supported account types**: *Accounts in this organizational directory only* (single tenant).
+4. **Redirect URI** (type *Web*) — add both under *Authentication*:
+   - Dev: `http://localhost:3000/api/auth/callback/microsoft-entra-id`
+   - Prod: `https://fvd.sandh.app/api/auth/callback/microsoft-entra-id`
+5. Copy the **Application (client) ID** and **Directory (tenant) ID** into the env vars above.
+6. **Certificates & secrets** → **New client secret** → copy the secret **Value**
+   (shown only once — if lost, create a new one).
+7. Optional, to limit access to specific people: in the app's *Enterprise
+   application* → *Properties*, set **Assignment required** to *Yes*, then
+   assign users/groups under *Users and groups*. No code change needed —
+   otherwise anyone in the tenant can sign in.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Auth architecture
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `src/lib/auth.ts` — Auth.js v5 config (Entra provider, JWT sessions, no DB).
+- `src/app/api/auth/[...nextauth]/route.ts` — OAuth callback handlers.
+- `src/proxy.ts` — returns 401 for `/api/*` without an Entra session.
+- `src/app/page.tsx` — server-side `auth()` check; renders the Microsoft
+  sign-in landing or the app.
+- `src/app/api/fv-session/route.ts` — exchanges the server's Filevine PAT for
+  an access token and returns a short-lived signed JWT to the client; requires
+  an Entra session. All other `/api/*` routes verify that JWT.
