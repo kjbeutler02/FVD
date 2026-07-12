@@ -9,8 +9,8 @@ export interface DownloadSelection {
   extraDocs: DocumentItem[];
   /** Individually deselected documents inside selected folders. */
   excludedDocIds: Set<number>;
-  /** Convert each PDF's text layer to a .md file in the ZIP. */
-  convertPdfToMd: boolean;
+  /** Convert each supported document (PDF, Word, text, …) to .md in the ZIP. */
+  convertToMd: boolean;
 }
 
 export interface FileProgress {

@@ -98,7 +98,7 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
   const [excludedDocs, setExcludedDocs] = useState<Map<number, DocumentItem>>(
     () => new Map()
   );
-  const [convertPdf, setConvertPdf] = useState(false);
+  const [convertDocs, setConvertDocs] = useState(false);
 
   const searching = query.trim().length > 0;
 
@@ -280,7 +280,7 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
         folderIds: null,
         extraDocs: [],
         excludedDocIds: new Set(),
-        convertPdfToMd: convertPdf,
+        convertToMd: convertDocs,
       });
       return;
     }
@@ -292,7 +292,7 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
           .filter((d) => selected.has(d.folderId))
           .map((d) => d.documentId)
       ),
-      convertPdfToMd: convertPdf,
+      convertToMd: convertDocs,
     });
   };
 
@@ -565,10 +565,10 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-5">
             <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-ink">
               <Checkbox
-                state={convertPdf ? "checked" : "unchecked"}
-                onToggle={() => setConvertPdf((v) => !v)}
+                state={convertDocs ? "checked" : "unchecked"}
+                onToggle={() => setConvertDocs((v) => !v)}
               />
-              Convert PDFs to Markdown
+              Convert documents to Markdown
             </label>
 
             <button

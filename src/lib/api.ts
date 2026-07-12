@@ -4,7 +4,12 @@ import { FOLDER_SCAN_CONCURRENCY } from "@/lib/constants";
 let sessionToken: string | null = null;
 
 async function refreshSession(): Promise<string> {
-  const res = await fetch("/api/auth", { method: "POST" });
+  const res = await fetch("/api/fv-session", { method: "POST" });
+  if (res.status === 401) {
+    // The Entra session expired — send the user back through sign-in.
+    window.location.assign("/");
+    throw new Error("Session expired — signing in again");
+  }
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || "Authentication failed");

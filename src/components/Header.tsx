@@ -1,24 +1,19 @@
 "use client";
 
 import { useState } from "react";
+import { signOut } from "next-auth/react";
 import { LogOut, Loader2 } from "lucide-react";
 import Wordmark from "@/components/Wordmark";
 
-interface Props {
-  onSignOut?: () => void;
-}
-
-export default function Header({ onSignOut }: Props) {
+export default function Header() {
   const [signingOut, setSigningOut] = useState(false);
 
   async function handleSignOut() {
     setSigningOut(true);
     try {
-      await fetch("/api/logout", { method: "POST" });
+      await signOut({ redirectTo: "/" });
     } catch {
-      // Clearing the cookie is best-effort; fall through to the reset regardless.
-    } finally {
-      onSignOut?.();
+      setSigningOut(false);
     }
   }
 
@@ -33,21 +28,19 @@ export default function Header({ onSignOut }: Props) {
           </span>
         </div>
 
-        {onSignOut && (
-          <button
-            type="button"
-            onClick={handleSignOut}
-            disabled={signingOut}
-            className="inline-flex items-center gap-2 rounded-sm border border-white/25 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-white transition-colors hover:bg-white/10 disabled:opacity-60"
-          >
-            {signingOut ? (
-              <Loader2 size={15} className="animate-spin" />
-            ) : (
-              <LogOut size={15} />
-            )}
-            <span className="hidden sm:inline">Sign Out</span>
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={handleSignOut}
+          disabled={signingOut}
+          className="inline-flex items-center gap-2 rounded-sm border border-white/25 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-white transition-colors hover:bg-white/10 disabled:opacity-60"
+        >
+          {signingOut ? (
+            <Loader2 size={15} className="animate-spin" />
+          ) : (
+            <LogOut size={15} />
+          )}
+          <span className="hidden sm:inline">Sign Out</span>
+        </button>
       </div>
     </header>
   );
