@@ -11,6 +11,7 @@ import PassphraseGate from "@/components/PassphraseGate";
 import { useDownloadOrchestrator } from "@/hooks/useDownloadOrchestrator";
 import { fetchFolders, type FolderResponse } from "@/lib/api";
 import type { FolderNode } from "@/types/filevine";
+import type { DownloadSelection } from "@/types/download";
 
 export default function Home() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -49,9 +50,9 @@ export default function Home() {
   }, []);
 
   const handleDownload = useCallback(
-    (selectedFolderIds: Set<number> | null) => {
+    (selection: DownloadSelection) => {
       if (!projectId) return;
-      startDownload(folderFlatMap, selectedFolderIds, projectId);
+      startDownload(folderFlatMap, selection, projectId);
     },
     [projectId, folderFlatMap, startDownload]
   );
