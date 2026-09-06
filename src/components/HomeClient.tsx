@@ -19,7 +19,8 @@ export default function HomeClient() {
   const [folderTree, setFolderTree] = useState<FolderNode[]>([]);
   const [folderFlatMap, setFolderFlatMap] = useState<FolderResponse["flatMap"]>({});
 
-  const { progress, startDownload, cancel, reset } = useDownloadOrchestrator();
+  const { progress, startDownload, confirmDownload, retryFailed, cancel, reset } =
+    useDownloadOrchestrator();
 
   const handleProjectSubmit = useCallback(async (pid: number) => {
     setLoading(true);
@@ -84,6 +85,8 @@ export default function HomeClient() {
         <ProgressPanel
           progress={progress}
           onCancel={cancel}
+          onConfirm={confirmDownload}
+          onRetryFailed={retryFailed}
           onClose={handleCloseDrawer}
           onNewProject={handleNewProject}
         />

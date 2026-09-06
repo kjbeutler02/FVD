@@ -7,12 +7,24 @@ import {
   downloadFileViaProxy,
   fetchAllDocuments,
   fetchDocumentsByFolders,
-  buildFolderPath,
+  isRetryable,
+  retryDelay,
 } from "@/lib/api";
-import { DOWNLOAD_CONCURRENCY, MAX_RETRIES, FOLDER_SCOPED_MAX } from "@/lib/constants";
+import { archivePath, displayFolderPath, folderPathParts } from "@/lib/zipPath";
+import {
+  DOWNLOAD_CONCURRENCY,
+  MAX_RETRIES,
+  FOLDER_SCOPED_MAX,
+  REPORT_FILENAME,
+} from "@/lib/constants";
 import { convertToMarkdown, isConvertible, markdownFilename } from "@/lib/toMarkdown";
 import type { DocumentItem } from "@/types/filevine";
-import type { DownloadProgress, DownloadSelection, FileProgress } from "@/types/download";
+import type {
+  DownloadProgress,
+  DownloadSelection,
+  FileOutcome,
+  FileProgress,
+} from "@/types/download";
 
 // showSaveFilePicker is Chromium-only and not yet in lib.dom.
 declare global {
@@ -24,83 +36,86 @@ declare global {
   }
 }
 
+type FolderFlatMap = Record<number, { name: string; parentId: number | null }>;
+
+/** Everything a confirmed run needs; captured at review time. */
+interface PendingRun {
+  docs: DocumentItem[];
+  folderFlatMap: FolderFlatMap;
+  projectId: number;
+  convertToMd: boolean;
+  zipName: string;
+  isRetry: boolean;
+  excludedCount: number;
+}
+
 function initialProgress(): DownloadProgress {
   return {
+    phase: "idle",
     totalFiles: 0,
     completedFiles: 0,
     failedFiles: 0,
-    currentFile: null,
+    activeFiles: [],
     files: new Map(),
-    phase: "idle",
+    excludedCount: 0,
+    convertToMd: false,
+    isRetry: false,
+    reportIncluded: false,
   };
+}
+
+function isAbort(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
+}
+
+function buildFileMap(docs: DocumentItem[], flatMap: FolderFlatMap): Map<number, FileProgress> {
+  const files = new Map<number, FileProgress>();
+  for (const doc of docs) {
+    files.set(doc.documentId, {
+      documentId: doc.documentId,
+      filename: doc.filename,
+      folderPath: displayFolderPath(doc.folderId, flatMap),
+      status: "pending",
+      convertible: isConvertible(doc.filename),
+    });
+  }
+  return files;
 }
 
 export function useDownloadOrchestrator() {
   const [progress, setProgress] = useState<DownloadProgress>(initialProgress);
-  const cancelledRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  // Every scan/download gets its own id. State updates from a superseded run
+  // (e.g. one that was cancelled and is still unwinding) are dropped, so a
+  // stale run can never close or overwrite the drawer of the current one.
+  const runIdRef = useRef(0);
+  const pendingRef = useRef<PendingRun | null>(null);
+  // The docs of the most recent download, so failures can be retried.
+  const lastRunRef = useRef<PendingRun | null>(null);
 
-  const updateFile = useCallback(
-    (docId: number, update: Partial<FileProgress>) => {
-      setProgress((prev) => {
-        const files = new Map(prev.files);
-        const existing = files.get(docId);
-        if (existing) {
-          files.set(docId, { ...existing, ...update });
-        }
-
-        let completedFiles = 0;
-        let failedFiles = 0;
-        let currentFile: string | null = null;
-        for (const f of files.values()) {
-          if (f.status === "complete") completedFiles++;
-          if (f.status === "error") failedFiles++;
-          if (f.status === "downloading" || f.status === "fetching-url") {
-            currentFile = f.filename;
-          }
-        }
-
-        return { ...prev, files, completedFiles, failedFiles, currentFile };
-      });
+  const commit = useCallback(
+    (runId: number, update: (prev: DownloadProgress) => DownloadProgress) => {
+      if (runId !== runIdRef.current) return;
+      setProgress(update);
     },
     []
   );
 
-  const startDownload = useCallback(
-    async (
-      folderFlatMap: Record<number, { name: string; parentId: number | null }>,
-      selection: DownloadSelection,
-      projectId: number
-    ) => {
-      const { folderIds: selectedFolderIds, extraDocs, excludedDocIds, convertToMd } = selection;
-      cancelledRef.current = false;
-      const controller = new AbortController();
-      abortRef.current = controller;
+  const beginRun = useCallback(() => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    runIdRef.current += 1;
+    return { runId: runIdRef.current, controller };
+  }, []);
 
-      // Ask for the save location up front, while we still have the click's
-      // user activation (the picker is blocked once the scan has been running
-      // for a while). Streaming the ZIP to disk keeps memory flat no matter
-      // how large the project is; browsers without the picker fall back to
-      // an in-memory Blob save.
-      const zipName = `filevine-project-${projectId}.zip`;
-      let fileHandle: FileSystemFileHandle | null = null;
-      if (window.showSaveFilePicker) {
-        try {
-          fileHandle = await window.showSaveFilePicker({
-            suggestedName: zipName,
-            types: [
-              { description: "ZIP archive", accept: { "application/zip": [".zip"] } },
-            ],
-          });
-        } catch (err) {
-          // Picker dismissed — treat as cancel.
-          if (err instanceof DOMException && err.name === "AbortError") {
-            setProgress(initialProgress());
-            return;
-          }
-          fileHandle = null; // blocked/unsupported — fall back to Blob save
-        }
-      }
+  /* ------------------------------------------------------------- scan */
+
+  const startDownload = useCallback(
+    async (folderFlatMap: FolderFlatMap, selection: DownloadSelection, projectId: number) => {
+      const { folderIds: selectedFolderIds, extraDocs, excludedDocIds, convertToMd } = selection;
+      const { runId, controller } = beginRun();
+      pendingRef.current = null;
 
       // A bounded, specific selection is fetched per-folder (server-scoped) so
       // we never touch unselected folders. "Select all" (null) and very large
@@ -112,26 +127,26 @@ export function useDownloadOrchestrator() {
         selectedFolderIds.size > 0 &&
         selectedFolderIds.size <= FOLDER_SCOPED_MAX;
 
-      // Phase 1: Scan for documents
-      setProgress({
+      commit(runId, () => ({
         ...initialProgress(),
         phase: "scanning",
+        convertToMd,
         scanProgress: 0,
         ...(useFolderScoped
           ? { scanFoldersDone: 0, scanFoldersTotal: selectedFolderIds!.size }
           : { scanTotal: 0 }),
-      });
+      }));
 
-      let filteredDocs: DocumentItem[];
+      let docs: DocumentItem[];
       try {
         if (skipScan) {
-          filteredDocs = [];
+          docs = [];
         } else if (useFolderScoped) {
-          filteredDocs = await fetchDocumentsByFolders(
+          docs = await fetchDocumentsByFolders(
             projectId,
             selectedFolderIds!,
             (found, done, total) => {
-              setProgress((prev) => ({
+              commit(runId, (prev) => ({
                 ...prev,
                 scanProgress: found,
                 scanFoldersDone: done,
@@ -141,10 +156,10 @@ export function useDownloadOrchestrator() {
             controller.signal
           );
         } else {
-          filteredDocs = await fetchAllDocuments(
+          docs = await fetchAllDocuments(
             projectId,
             (matched, scanned) => {
-              setProgress((prev) => ({ ...prev, scanProgress: matched, scanTotal: scanned }));
+              commit(runId, (prev) => ({ ...prev, scanProgress: matched, scanTotal: scanned }));
             },
             selectedFolderIds,
             controller.signal
@@ -152,11 +167,11 @@ export function useDownloadOrchestrator() {
         }
       } catch (err) {
         // A cancel/abort is a normal outcome — return to idle, not an error.
-        if (cancelledRef.current || (err instanceof DOMException && err.name === "AbortError")) {
-          setProgress((prev) => ({ ...prev, phase: "idle" }));
+        if (controller.signal.aborted || isAbort(err)) {
+          commit(runId, (prev) => ({ ...prev, phase: "idle" }));
           return;
         }
-        setProgress((prev) => ({
+        commit(runId, (prev) => ({
           ...prev,
           phase: "error",
           errorMessage: err instanceof Error ? err.message : "Failed to fetch document list",
@@ -164,26 +179,29 @@ export function useDownloadOrchestrator() {
         return;
       }
 
-      if (cancelledRef.current) {
-        setProgress((prev) => ({ ...prev, phase: "idle" }));
+      if (controller.signal.aborted) {
+        commit(runId, (prev) => ({ ...prev, phase: "idle" }));
         return;
       }
 
       // Apply the document-level overrides: drop individually deselected
       // documents, then add individually selected ones (de-duped by id).
+      let excludedCount = 0;
       if (excludedDocIds.size > 0) {
-        filteredDocs = filteredDocs.filter((d) => !excludedDocIds.has(d.documentId));
+        const before = docs.length;
+        docs = docs.filter((d) => !excludedDocIds.has(d.documentId));
+        excludedCount = before - docs.length;
       }
-      const included = new Set(filteredDocs.map((d) => d.documentId));
+      const included = new Set(docs.map((d) => d.documentId));
       for (const doc of extraDocs) {
         if (!included.has(doc.documentId)) {
           included.add(doc.documentId);
-          filteredDocs.push(doc);
+          docs.push(doc);
         }
       }
 
-      if (filteredDocs.length === 0) {
-        setProgress((prev) => ({
+      if (docs.length === 0) {
+        commit(runId, (prev) => ({
           ...prev,
           phase: "error",
           errorMessage: "No documents found in the selected folders.",
@@ -191,34 +209,104 @@ export function useDownloadOrchestrator() {
         return;
       }
 
-      // Phase 2: Download files, streaming each into the ZIP as it completes.
-      const files = new Map<number, FileProgress>();
-      for (const doc of filteredDocs) {
-        const folderPath = buildFolderPath(doc.folderId, folderFlatMap);
-        files.set(doc.documentId, {
-          documentId: doc.documentId,
-          filename: doc.filename,
-          folderPath,
-          status: "pending",
-        });
+      // Stable, predictable archive order: by folder path, then filename.
+      const pathOf = new Map<number, string>();
+      for (const d of docs) {
+        if (!pathOf.has(d.folderId)) pathOf.set(d.folderId, displayFolderPath(d.folderId, folderFlatMap));
       }
+      docs.sort(
+        (a, b) =>
+          pathOf.get(a.folderId)!.localeCompare(pathOf.get(b.folderId)!) ||
+          a.filename.localeCompare(b.filename)
+      );
 
-      setProgress({
-        totalFiles: filteredDocs.length,
-        completedFiles: 0,
-        failedFiles: 0,
-        currentFile: null,
-        files,
-        phase: "downloading",
-      });
-
-      const entries = zipEntries(
-        filteredDocs,
+      pendingRef.current = {
+        docs,
         folderFlatMap,
-        updateFile,
-        cancelledRef,
-        controller.signal,
-        convertToMd
+        projectId,
+        convertToMd,
+        zipName: `filevine-project-${projectId}.zip`,
+        isRetry: false,
+        excludedCount,
+      };
+
+      commit(runId, (prev) => ({
+        ...prev,
+        phase: "review",
+        totalFiles: docs.length,
+        files: buildFileMap(docs, folderFlatMap),
+        excludedCount,
+        zipName: pendingRef.current!.zipName,
+      }));
+    },
+    [beginRun, commit]
+  );
+
+  /* --------------------------------------------------------- download */
+
+  const runDownload = useCallback(
+    async (run: PendingRun) => {
+      const { runId, controller } = beginRun();
+
+      // Ask for the save location first, while we still have the click's user
+      // activation. Streaming the ZIP to disk keeps memory flat no matter how
+      // large the project is; browsers without the picker fall back to an
+      // in-memory Blob save.
+      let fileHandle: FileSystemFileHandle | null = null;
+      if (window.showSaveFilePicker) {
+        try {
+          fileHandle = await window.showSaveFilePicker({
+            suggestedName: run.zipName,
+            types: [{ description: "ZIP archive", accept: { "application/zip": [".zip"] } }],
+          });
+        } catch (err) {
+          if (isAbort(err)) {
+            // Picker dismissed — leave the drawer exactly as it was (review or
+            // complete) so they can try again.
+            pendingRef.current = run.isRetry ? null : run;
+            return;
+          }
+          fileHandle = null; // blocked/unsupported — fall back to Blob save
+        }
+      }
+      if (controller.signal.aborted) return;
+      pendingRef.current = null;
+      lastRunRef.current = run;
+
+      const files = buildFileMap(run.docs, run.folderFlatMap);
+      commit(runId, () => ({
+        ...initialProgress(),
+        phase: "downloading",
+        totalFiles: run.docs.length,
+        files,
+        excludedCount: run.excludedCount,
+        convertToMd: run.convertToMd,
+        isRetry: run.isRetry,
+        zipName: run.zipName,
+      }));
+
+      const updateFile = (docId: number, update: Partial<FileProgress>) => {
+        commit(runId, (prev) => {
+          const existing = prev.files.get(docId);
+          if (!existing) return prev;
+          const files = new Map(prev.files);
+          files.set(docId, { ...existing, ...update });
+
+          let completedFiles = 0;
+          let failedFiles = 0;
+          const activeFiles: string[] = [];
+          for (const f of files.values()) {
+            if (f.status === "complete") completedFiles++;
+            else if (f.status === "error") failedFiles++;
+            else if (f.status === "downloading") activeFiles.push(f.filename);
+          }
+          return { ...prev, files, completedFiles, failedFiles, activeFiles };
+        });
+      };
+
+      const report = { failures: [] as FileProgress[], keptOriginal: [] as FileProgress[] };
+      const entries = zipEntries(run, updateFile, controller.signal, report, () =>
+        commit(runId, (prev) => ({ ...prev, reportIncluded: true }))
       );
       const zipResponse = downloadZip(entries);
 
@@ -228,162 +316,225 @@ export function useDownloadOrchestrator() {
           // pipeTo aborts the writable on cancel, discarding the partial file.
           await zipResponse.body!.pipeTo(writable, { signal: controller.signal });
         } else {
-          setProgress((prev) => ({ ...prev, phase: "zipping", currentFile: null }));
+          commit(runId, (prev) => ({ ...prev, phase: "zipping", activeFiles: [] }));
           const blob = await zipResponse.blob();
-          if (cancelledRef.current) {
-            setProgress((prev) => ({ ...prev, phase: "idle" }));
+          if (controller.signal.aborted) {
+            commit(runId, (prev) => ({ ...prev, phase: "idle" }));
             return;
           }
-          saveAs(blob, zipName);
+          saveAs(blob, run.zipName);
         }
-        setProgress((prev) => ({ ...prev, phase: "complete", currentFile: null }));
+        commit(runId, (prev) => ({ ...prev, phase: "complete", activeFiles: [] }));
       } catch (err) {
-        if (cancelledRef.current || (err instanceof DOMException && err.name === "AbortError")) {
-          setProgress((prev) => ({ ...prev, phase: "idle" }));
+        if (controller.signal.aborted || isAbort(err)) {
+          commit(runId, (prev) => ({ ...prev, phase: "idle" }));
           return;
         }
-        setProgress((prev) => ({
+        commit(runId, (prev) => ({
           ...prev,
           phase: "error",
-          errorMessage:
-            err instanceof Error ? err.message : "Failed to save ZIP file",
+          activeFiles: [],
+          errorMessage: err instanceof Error ? err.message : "Failed to save ZIP file",
         }));
       }
     },
-    [updateFile]
+    [beginRun, commit]
   );
 
-  const cancel = useCallback(() => {
-    cancelledRef.current = true;
-    abortRef.current?.abort();
-    // Surface the cancel immediately, even mid-scan before the loop unwinds.
-    setProgress((prev) => ({ ...prev, phase: "idle" }));
-  }, []);
+  /** Confirm the reviewed list: choose a save location and start downloading. */
+  const confirmDownload = useCallback(() => {
+    const run = pendingRef.current;
+    if (!run) return;
+    void runDownload(run);
+  }, [runDownload]);
 
-  const reset = useCallback(() => {
-    cancelledRef.current = false;
+  /** Download only the files that failed in the last run, into a second ZIP. */
+  const retryFailed = useCallback(() => {
+    const last = lastRunRef.current;
+    if (!last) return;
+    const failedIds = new Set<number>();
+    for (const f of progress.files.values()) {
+      if (f.status === "error") failedIds.add(f.documentId);
+    }
+    const docs = last.docs.filter((d) => failedIds.has(d.documentId));
+    if (docs.length === 0) return;
+    const baseName = last.zipName.replace(/(-retry(-\d+)?)?\.zip$/, "");
+    const attempt = /-retry-(\d+)\.zip$/.exec(last.zipName);
+    const n = attempt ? Number(attempt[1]) + 1 : last.zipName.includes("-retry") ? 2 : 1;
+    void runDownload({
+      ...last,
+      docs,
+      isRetry: true,
+      excludedCount: 0,
+      zipName: n === 1 ? `${baseName}-retry.zip` : `${baseName}-retry-${n}.zip`,
+    });
+  }, [progress.files, runDownload]);
+
+  const cancel = useCallback(() => {
+    // Invalidate the run first so its unwinding never touches state again.
+    runIdRef.current += 1;
+    pendingRef.current = null;
     abortRef.current?.abort();
     abortRef.current = null;
     setProgress(initialProgress());
   }, []);
 
-  return { progress, startDownload, cancel, reset };
+  const reset = cancel;
+
+  return { progress, startDownload, confirmDownload, retryFailed, cancel, reset };
 }
+
+/* ------------------------------------------------------------- workers */
 
 interface ZipEntry {
   name: string;
-  input: Blob;
+  input: Blob | string;
+}
+
+interface FileResult {
+  entry: ZipEntry | null;
+  progress: FileProgress | null;
 }
 
 /**
  * Yields downloaded files in document order while keeping up to
  * DOWNLOAD_CONCURRENCY fetches in flight, so the ZIP stream consumes each
  * file as soon as it (and everything before it) is ready. Failed files are
- * marked in the progress map and skipped rather than aborting the archive.
+ * marked in the progress map and skipped rather than aborting the archive;
+ * if any failed (or kept their original because no text could be extracted),
+ * a plain-text report is appended as the last entry.
  */
 async function* zipEntries(
-  docs: DocumentItem[],
-  folderFlatMap: Record<number, { name: string; parentId: number | null }>,
+  run: PendingRun,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
-  cancelledRef: React.RefObject<boolean>,
   signal: AbortSignal,
-  convertToMd: boolean
+  report: { failures: FileProgress[]; keptOriginal: FileProgress[] },
+  onReportIncluded: () => void
 ): AsyncGenerator<ZipEntry> {
   const usedPaths = new Set<string>();
-  const inFlight: Promise<ZipEntry | null>[] = [];
+  const inFlight: Promise<FileResult>[] = [];
   let next = 0;
 
-  while (next < docs.length || inFlight.length > 0) {
-    if (cancelledRef.current || signal.aborted) {
-      throw new DOMException("Aborted", "AbortError");
+  while (next < run.docs.length || inFlight.length > 0) {
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+
+    while (inFlight.length < DOWNLOAD_CONCURRENCY && next < run.docs.length) {
+      inFlight.push(downloadSingleFile(run.docs[next++], run, usedPaths, updateFile, signal));
     }
 
-    while (inFlight.length < DOWNLOAD_CONCURRENCY && next < docs.length) {
-      inFlight.push(
-        downloadSingleFile(
-          docs[next++],
-          folderFlatMap,
-          usedPaths,
-          updateFile,
-          signal,
-          convertToMd
-        )
-      );
-    }
-
-    const entry = await inFlight.shift()!;
+    const { entry, progress } = await inFlight.shift()!;
+    if (progress?.status === "error") report.failures.push(progress);
+    if (progress?.outcome === "kept-original") report.keptOriginal.push(progress);
     if (entry) yield entry;
+  }
+
+  if (report.failures.length > 0 || report.keptOriginal.length > 0) {
+    onReportIncluded();
+    yield {
+      name: archivePath([], REPORT_FILENAME, usedPaths),
+      input: buildReport(run, report.failures, report.keptOriginal),
+    };
   }
 }
 
 async function downloadSingleFile(
   doc: DocumentItem,
-  folderFlatMap: Record<number, { name: string; parentId: number | null }>,
+  run: PendingRun,
   usedPaths: Set<string>,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
-  signal: AbortSignal,
-  convertToMd: boolean
-): Promise<ZipEntry | null> {
+  signal: AbortSignal
+): Promise<FileResult> {
   updateFile(doc.documentId, { status: "downloading" });
+  const folderParts = folderPathParts(doc.folderId, run.folderFlatMap);
+  const base: FileProgress = {
+    documentId: doc.documentId,
+    filename: doc.filename,
+    folderPath: folderParts.join("/"),
+    status: "pending",
+    convertible: isConvertible(doc.filename),
+  };
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       let blob = await downloadFileViaProxy(doc.documentId, signal);
       let filename = doc.filename;
+      let outcome: FileOutcome | undefined;
 
       // Replace convertible documents (PDF, Word, text, CSV, …) with their
       // extracted Markdown. Files with no usable text (scanned PDFs, corrupt
       // or encrypted documents) keep the original file instead.
-      if (convertToMd && isConvertible(doc.filename)) {
+      if (run.convertToMd && base.convertible) {
         const markdown = await convertToMarkdown(blob, doc.filename);
         if (markdown != null) {
           blob = new Blob([markdown], { type: "text/markdown" });
           filename = markdownFilename(doc.filename);
+          outcome = "converted";
+        } else {
+          outcome = "kept-original";
         }
       }
 
-      const folderPath = buildFolderPath(doc.folderId, folderFlatMap);
-      const zipPath = uniquePath(
-        folderPath ? `${folderPath}/${filename}` : filename,
-        usedPaths
-      );
-
-      updateFile(doc.documentId, { status: "complete" });
-      return { name: zipPath, input: blob };
+      const zipPath = archivePath(folderParts, filename, usedPaths);
+      const done: FileProgress = { ...base, status: "complete", zipPath, outcome };
+      updateFile(doc.documentId, { status: "complete", zipPath, outcome });
+      return { entry: { name: zipPath, input: blob }, progress: done };
     } catch (err) {
       // On cancel, stop quietly — don't retry or flag the file as failed.
-      if (signal.aborted) return null;
-      if (attempt < MAX_RETRIES) {
-        await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
-      } else {
-        updateFile(doc.documentId, {
-          status: "error",
-          error: err instanceof Error ? err.message : "Download failed",
-        });
+      if (signal.aborted) return { entry: null, progress: null };
+      if (attempt < MAX_RETRIES && isRetryable(err)) {
+        await new Promise((r) => setTimeout(r, retryDelay(err, attempt)));
+        continue;
       }
+      const message = err instanceof Error ? err.message : "Download failed";
+      const failed: FileProgress = { ...base, status: "error", error: message };
+      updateFile(doc.documentId, { status: "error", error: message });
+      return { entry: null, progress: failed };
     }
   }
 
-  return null;
+  return { entry: null, progress: null };
 }
 
-/**
- * Duplicate filenames in the same folder would collide in the archive
- * (previously JSZip silently overwrote them) — suffix repeats instead.
- */
-function uniquePath(path: string, usedPaths: Set<string>): string {
-  if (!usedPaths.has(path)) {
-    usedPaths.add(path);
-    return path;
-  }
-  const dot = path.lastIndexOf(".");
-  const stem = dot > 0 ? path.slice(0, dot) : path;
-  const ext = dot > 0 ? path.slice(dot) : "";
-  for (let n = 2; ; n++) {
-    const candidate = `${stem} (${n})${ext}`;
-    if (!usedPaths.has(candidate)) {
-      usedPaths.add(candidate);
-      return candidate;
+function buildReport(
+  run: PendingRun,
+  failures: FileProgress[],
+  keptOriginal: FileProgress[]
+): string {
+  const total = run.docs.length;
+  const lines: string[] = [
+    `Filevine project ${run.projectId} — download report`,
+    `Archive: ${run.zipName}`,
+    `Generated: ${new Date().toLocaleString()}`,
+    "",
+    `${total - failures.length} of ${total} files were saved to this archive.`,
+  ];
+
+  if (failures.length > 0) {
+    lines.push(
+      "",
+      `NOT DOWNLOADED (${failures.length})`,
+      `These files could not be retrieved after ${MAX_RETRIES} attempts and are missing from the archive.`,
+      `Use "Retry failed files" in the downloader to fetch them into a second archive.`,
+      ""
+    );
+    for (const f of failures) {
+      const path = f.folderPath ? `${f.folderPath}/${f.filename}` : f.filename;
+      lines.push(`  ${path}`, `      Document ID ${f.documentId} — ${f.error ?? "Download failed"}`);
     }
   }
+
+  if (keptOriginal.length > 0) {
+    lines.push(
+      "",
+      `KEPT AS ORIGINAL (${keptOriginal.length})`,
+      "Markdown conversion was on, but no text could be extracted from these files",
+      "(typically scanned PDFs without OCR, or encrypted documents). The original file was saved instead.",
+      ""
+    );
+    for (const f of keptOriginal) {
+      lines.push(`  ${f.zipPath ?? f.filename}`);
+    }
+  }
+
+  return lines.join("\n") + "\n";
 }

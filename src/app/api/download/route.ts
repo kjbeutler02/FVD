@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifySessionToken, getFilevineHeaders } from "@/lib/session";
-import { fetchLocator } from "@/lib/filevine";
+import { fetchLocator, statusForError } from "@/lib/filevine";
 
 export const maxDuration = 60; // Allow up to 60s on Pro tier for large files
 
@@ -32,10 +32,13 @@ export async function POST(request: Request) {
 
     // Download the file server-side (bypasses CORS)
     const fileRes = await fetch(locator.url);
-    if (!fileRes.ok) {
+    if (!fileRes.ok || !fileRes.body) {
+      // Storage throttling is reported as such so the client backs off
+      // instead of burning its retries immediately.
+      const status = fileRes.status === 429 ? 429 : 502;
       return NextResponse.json(
-        { error: `File download failed: ${fileRes.status}` },
-        { status: 502 }
+        { error: `File download failed: storage returned ${fileRes.status}` },
+        { status }
       );
     }
 
@@ -52,7 +55,7 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Download failed";
-    const status = message.includes("expired") || message.includes("JWS") ? 401 : 500;
+    const status = statusForError(err);
     return NextResponse.json({ error: message }, { status });
   }
 }

@@ -4,6 +4,20 @@ Internal Strong & Hanni tool. Browse a Filevine project's folders, select
 folders and/or individual documents, and download them as a ZIP — optionally
 converting documents (PDF, Word, text, CSV, …) to Markdown on the way.
 
+## Download flow
+
+1. **Review & Download** builds the document list for the selection (nothing is
+   fetched yet) and shows it grouped by folder, with counts and which files
+   will be converted to Markdown.
+2. **Save ZIP** asks where to save (Chromium) and streams the archive to disk;
+   other browsers fall back to an in-memory Blob save.
+3. Files are fetched four at a time with retries (throttling backs off longer).
+   Folder and file names are sanitised so the ZIP extracts cleanly on Windows;
+   duplicates are suffixed ` (2)`, ` (3)`, ….
+4. If anything fails, the missing files are listed in the drawer and in
+   `_DOWNLOAD REPORT.txt` inside the archive, and **Retry failed files** fetches
+   just those into a second ZIP.
+
 Sign-in uses **Microsoft Entra ID** (the firm's M365 tenant) via Auth.js.
 
 ## Development

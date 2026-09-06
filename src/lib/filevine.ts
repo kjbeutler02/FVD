@@ -1,5 +1,35 @@
 import { API_ROOT, IDENTITY_URL } from "./constants";
 
+/**
+ * A failed Filevine API call. `upstreamStatus` lets API routes translate the
+ * failure into a status the client can act on (throttling vs. hard error).
+ */
+export class FilevineError extends Error {
+  constructor(
+    message: string,
+    public readonly upstreamStatus: number
+  ) {
+    super(message);
+    this.name = "FilevineError";
+  }
+}
+
+/**
+ * HTTP status for a route to return for `err`. Session problems are 401 so the
+ * client refreshes its token; Filevine throttling is passed through as 429;
+ * other upstream failures are 502; anything else is a 500.
+ */
+export function statusForError(err: unknown): number {
+  const message = err instanceof Error ? err.message : "";
+  if (message.includes("expired") || message.includes("JWS") || message.includes("JWT")) return 401;
+  if (err instanceof FilevineError) {
+    if (err.upstreamStatus === 429) return 429;
+    if (err.upstreamStatus === 401 || err.upstreamStatus === 403) return 401;
+    return 502;
+  }
+  return 500;
+}
+
 interface TokenResponse {
   access_token: string;
 }
@@ -81,7 +111,7 @@ export async function fetchFolderTree(
   const url = `${API_ROOT}/Folders/list?projectId=${projectId}&includeArchivedFolders=false`;
   const res = await fetch(url, { headers });
   if (!res.ok) {
-    throw new Error(`Failed to fetch folders: ${res.status}`);
+    throw new FilevineError(`Failed to fetch folders: ${res.status}`, res.status);
   }
   const data = await res.json();
   return data.items ?? [];
@@ -143,7 +173,7 @@ export async function fetchDocumentPage(
   if (folderId != null) params.set("folderId", String(folderId));
   const res = await fetch(`${API_ROOT}/DocumentSeries?${params}`, { headers });
   if (!res.ok) {
-    throw new Error(`Failed to fetch documents: ${res.status}`);
+    throw new FilevineError(`Failed to fetch documents: ${res.status}`, res.status);
   }
   const data = await res.json();
   const items = data.items ?? [];
@@ -164,7 +194,12 @@ export async function fetchLocator(
 ): Promise<{ url: string }> {
   const res = await fetch(`${API_ROOT}/Documents/${docId}/locator`, { headers });
   if (!res.ok) {
-    throw new Error(`Failed to get locator for doc ${docId}: ${res.status}`);
+    throw new FilevineError(`Failed to get locator for doc ${docId}: ${res.status}`, res.status);
   }
-  return res.json();
+  const data = await res.json();
+  if (typeof data?.url !== "string" || data.url === "") {
+    // Happens for documents whose file is missing in storage or still processing.
+    throw new FilevineError(`Filevine did not provide a download link for doc ${docId}`, 404);
+  }
+  return data;
 }

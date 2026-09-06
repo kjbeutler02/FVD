@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifySessionToken, getFilevineHeaders } from "@/lib/session";
-import { fetchDocumentPage } from "@/lib/filevine";
+import { fetchDocumentPage, statusForError } from "@/lib/filevine";
 
 interface RawDocItem {
   documentId?: { native?: number };
@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch documents";
-    const status = message.includes("expired") || message.includes("JWS") ? 401 : 500;
+    const status = statusForError(err);
     return NextResponse.json({ error: message }, { status });
   }
 }

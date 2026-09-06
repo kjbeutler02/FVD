@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifySessionToken, getFilevineHeaders } from "@/lib/session";
-import { fetchLocator } from "@/lib/filevine";
+import { fetchLocator, statusForError } from "@/lib/filevine";
 import { LOCATOR_BATCH_SIZE } from "@/lib/constants";
 
 export async function POST(request: Request) {
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ locators });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch locators";
-    const status = message.includes("expired") || message.includes("JWS") ? 401 : 500;
+    const status = statusForError(err);
     return NextResponse.json({ error: message }, { status });
   }
 }

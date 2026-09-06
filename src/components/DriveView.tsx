@@ -578,7 +578,7 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
               className="flex items-center justify-center gap-2 rounded-sm bg-brand px-5 py-2.5 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Download size={17} />
-              Download as ZIP
+              Review &amp; Download
             </button>
           </div>
         </div>

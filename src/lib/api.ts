@@ -1,22 +1,99 @@
 import type { FolderNode, DocumentItem, DocumentPage, LocatorResult } from "@/types/filevine";
-import { FOLDER_SCAN_CONCURRENCY } from "@/lib/constants";
+import { FOLDER_SCAN_CONCURRENCY, SCAN_RETRIES } from "@/lib/constants";
+
+export { displayFolderPath as buildFolderPath } from "@/lib/zipPath";
+
+/** An HTTP failure from our API routes, with the status so callers can decide how to retry. */
+export class HttpError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
+/** Transient failures worth retrying: throttling, upstream/server errors, network drops. */
+export function isRetryable(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "AbortError") return false;
+  if (err instanceof HttpError) {
+    return err.status === 408 || err.status === 429 || err.status >= 500;
+  }
+  // fetch() rejects with a TypeError on network failure.
+  return err instanceof TypeError;
+}
+
+/** Backoff for the given attempt (1-based); throttling waits longer. */
+export function retryDelay(err: unknown, attempt: number): number {
+  const base = err instanceof HttpError && err.status === 429 ? 5000 : 1000;
+  return Math.min(base * 2 ** (attempt - 1), 30_000);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
+    const t = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(t);
+      reject(new DOMException("Aborted", "AbortError"));
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Run `fn` up to `attempts` times, backing off between retryable failures. */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  attempts: number,
+  signal?: AbortSignal
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= attempts || !isRetryable(err)) throw err;
+      await sleep(retryDelay(err, attempt), signal);
+    }
+  }
+}
+
+async function errorFromResponse(res: Response, fallback: string): Promise<HttpError> {
+  const data = await res.json().catch(() => ({}));
+  const detail = typeof data.error === "string" && data.error ? data.error : fallback;
+  return new HttpError(detail, res.status);
+}
+
+/* ------------------------------------------------------------- session */
 
 let sessionToken: string | null = null;
+// Concurrent 401s (four downloads hitting an expired token at once) share a
+// single refresh instead of each minting a new session.
+let refreshInFlight: Promise<string> | null = null;
 
-async function refreshSession(): Promise<string> {
-  const res = await fetch("/api/fv-session", { method: "POST" });
-  if (res.status === 401) {
-    // The Entra session expired — send the user back through sign-in.
-    window.location.assign("/");
-    throw new Error("Session expired — signing in again");
+function refreshSession(): Promise<string> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      const res = await fetch("/api/fv-session", { method: "POST" });
+      if (res.status === 401) {
+        // The Entra session expired — send the user back through sign-in.
+        window.location.assign("/");
+        throw new Error("Session expired — signing in again");
+      }
+      if (!res.ok) {
+        throw await errorFromResponse(res, "Authentication failed");
+      }
+      const data = await res.json();
+      sessionToken = data.sessionToken;
+      return sessionToken!;
+    })().finally(() => {
+      refreshInFlight = null;
+    });
   }
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || "Authentication failed");
-  }
-  const data = await res.json();
-  sessionToken = data.sessionToken;
-  return sessionToken!;
+  return refreshInFlight;
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -27,15 +104,17 @@ async function authHeaders(): Promise<Record<string, string>> {
 }
 
 async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
+  const tokenBefore = sessionToken;
   const headers = await authHeaders();
   const res = await fetch(url, {
     ...init,
     headers: { ...headers, ...init?.headers },
   });
 
-  // Auto-refresh on 401 (don't retry if the caller already aborted)
+  // Auto-refresh on 401 (don't retry if the caller already aborted). If another
+  // request already refreshed the token since we read it, just reuse that one.
   if (res.status === 401 && !init?.signal?.aborted) {
-    await refreshSession();
+    if (sessionToken === tokenBefore) await refreshSession();
     const newHeaders = await authHeaders();
     return fetch(url, {
       ...init,
@@ -46,6 +125,8 @@ async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response>
   return res;
 }
 
+/* ------------------------------------------------------------- folders */
+
 export interface FolderResponse {
   tree: FolderNode[];
   flatMap: Record<number, { name: string; parentId: number | null }>;
@@ -54,12 +135,11 @@ export interface FolderResponse {
 
 export async function fetchFolders(projectId: number): Promise<FolderResponse> {
   const res = await fetchWithAuth(`/api/folders?projectId=${projectId}`);
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || "Failed to fetch folders");
-  }
+  if (!res.ok) throw await errorFromResponse(res, "Failed to fetch folders");
   return res.json();
 }
+
+/* ----------------------------------------------------------- documents */
 
 export async function fetchDocumentPage(
   projectId: number,
@@ -74,12 +154,16 @@ export async function fetchDocumentPage(
     limit: String(limit),
   });
   if (folderId != null) params.set("folderId", String(folderId));
-  const res = await fetchWithAuth(`/api/documents?${params}`, { signal });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || "Failed to fetch documents");
-  }
-  return res.json();
+  // One throttled or flaky page used to abort the whole scan; retry it.
+  return withRetry(
+    async () => {
+      const res = await fetchWithAuth(`/api/documents?${params}`, { signal });
+      if (!res.ok) throw await errorFromResponse(res, "Failed to fetch documents");
+      return res.json() as Promise<DocumentPage>;
+    },
+    SCAN_RETRIES,
+    signal
+  );
 }
 
 /** Paginate one folder's documents (server-scoped via folderId). */
@@ -175,16 +259,15 @@ export async function fetchAllDocuments(
   return allDocs;
 }
 
+/* ------------------------------------------------------------ download */
+
 export async function fetchLocators(documentIds: number[]): Promise<LocatorResult[]> {
   const res = await fetchWithAuth("/api/locators", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ documentIds }),
   });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || "Failed to fetch locators");
-  }
+  if (!res.ok) throw await errorFromResponse(res, "Failed to fetch locators");
   const data = await res.json();
   return data.locators;
 }
@@ -199,28 +282,8 @@ export async function downloadFileViaProxy(
     body: JSON.stringify({ documentId }),
     signal,
   });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `Download failed for doc ${documentId}`);
-  }
+  if (!res.ok) throw await errorFromResponse(res, `Download failed (HTTP ${res.status})`);
   // Blob (not ArrayBuffer) so the browser can spill large files to disk
   // instead of holding every byte in JS heap memory.
   return res.blob();
-}
-
-export function buildFolderPath(
-  folderId: number,
-  flatMap: Record<number, { name: string; parentId: number | null }>
-): string {
-  const parts: string[] = [];
-  let cur: number | null = folderId;
-  const visited = new Set<number>();
-
-  while (cur != null && !visited.has(cur) && flatMap[cur]) {
-    visited.add(cur);
-    parts.push(flatMap[cur].name);
-    cur = flatMap[cur].parentId;
-  }
-
-  return parts.reverse().join("/");
 }

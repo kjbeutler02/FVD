@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifySessionToken, getFilevineHeaders } from "@/lib/session";
-import { fetchFolderTree, buildFolderTree, type RawFolderItem } from "@/lib/filevine";
+import { fetchFolderTree, buildFolderTree, type RawFolderItem, statusForError } from "@/lib/filevine";
 
 export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("projectId");
@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ tree, flatMap, totalCount: Object.keys(flatMap).length });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch folders";
-    const status = message.includes("expired") || message.includes("JWS") ? 401 : 500;
+    const status = statusForError(err);
     return NextResponse.json({ error: message }, { status });
   }
 }

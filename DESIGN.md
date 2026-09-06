@@ -47,8 +47,8 @@ Each interactive element ships default / hover / focus / active / disabled / sel
 - **Folder card (grid)** & **folder row (list)** — folder icon (brand), name, sub-count; checkbox to select, body click to open; selected = `--brand-tint` bg + brand border + checked.
 - **Breadcrumb** — clickable segments, `ChevronRight` separators, root = "All Folders".
 - **Sidebar tree** — indented expand/collapse nav; current folder highlighted with brand tint; navigation only (selection lives in the main area).
-- **Drawer** — phase-driven (scanning → downloading → zipping → complete / error), brand progress bar, scrollable per-file status list.
-- **States** — scan uses a spinner with live count; empty folder explains documents still download when selected; partial-failure download reports counts; errors are branded, never dead ends.
+- **Drawer** — phase-driven (scanning → review → downloading → zipping → complete / error). Review shows the full list grouped by folder with counts before anything is fetched; the primary "Save ZIP · N files" action opens the save-location picker. Downloading shows a brand progress bar, the files in flight, per-folder progress, and a "Not downloaded" section pinned to the top. Cancelling mid-transfer asks for confirmation inline.
+- **States** — scan uses a spinner with live count; empty folder explains documents still download when selected; partial-failure download reports counts, lists the missing files, writes `_DOWNLOAD REPORT.txt` into the archive, and offers "Retry failed files" into a second ZIP; errors are branded, never dead ends.
 
 ## Motion
 
