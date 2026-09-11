@@ -15,14 +15,22 @@ import {
   FileText,
   RotateCcw,
   ListChecks,
+  FolderDown,
+  Play,
 } from "lucide-react";
-import { REPORT_FILENAME } from "@/lib/constants";
-import type { DownloadPhase, DownloadProgress, FileProgress } from "@/types/download";
+import { PART_MAX_FILES, REPORT_FILENAME, RUN_REPORT_FILENAME } from "@/lib/constants";
+import type {
+  DownloadPhase,
+  DownloadProgress,
+  FileProgress,
+  PartProgress,
+} from "@/types/download";
 
 interface Props {
   progress: DownloadProgress;
   onCancel: () => void;
   onConfirm: () => void;
+  onResume: () => void;
   onRetryFailed: () => void;
   onClose: () => void;
   onNewProject: () => void;
@@ -60,6 +68,7 @@ export default function ProgressPanel({
   progress,
   onCancel,
   onConfirm,
+  onResume,
   onRetryFailed,
   onClose,
   onNewProject,
@@ -75,6 +84,11 @@ export default function ProgressPanel({
     convertToMd,
     isRetry,
     zipName,
+    parts,
+    currentPart,
+    saveMode,
+    saveFolder,
+    canResume,
     reportIncluded,
     errorMessage,
     scanProgress,
@@ -88,6 +102,9 @@ export default function ProgressPanel({
   const isTransferring = phase === "downloading" || phase === "zipping";
   const isActive = phase === "scanning" || isTransferring;
   const isDone = phase === "complete" || phase === "error";
+  const isSplit = parts.length > 1;
+  const activePart = currentPart != null ? parts[currentPart - 1] : undefined;
+  const savedParts = parts.filter((p) => p.status === "complete").length;
 
   // Cancelling mid-transfer throws away everything fetched so far, so the X /
   // Cancel button asks first. Scanning and review have nothing to lose.
@@ -184,7 +201,11 @@ export default function ProgressPanel({
               {zipName && phase !== "scanning" && (
                 <p className="truncate text-xs font-light text-muted">
                   {isRetry ? "Retry archive · " : ""}
-                  {zipName}
+                  {isSplit
+                    ? isTransferring && activePart
+                      ? `Part ${activePart.index} of ${parts.length} · ${activePart.zipName}`
+                      : `${plural(parts.length, "ZIP file")}${saveFolder ? ` in "${saveFolder}"` : ""}`
+                    : zipName}
                 </p>
               )}
             </div>
@@ -236,6 +257,7 @@ export default function ProgressPanel({
             <ReviewSummary
               totalFiles={totalFiles}
               folderCount={groups.length}
+              partCount={parts.length}
               excludedCount={excludedCount}
               convertToMd={convertToMd}
               convertibleTotal={convertibleTotal}
@@ -274,6 +296,15 @@ export default function ProgressPanel({
                   )}
                 </span>
               </div>
+              {isTransferring && isSplit && activePart && (
+                <p className="mt-2 truncate text-xs font-light text-muted">
+                  <span className="font-medium text-ink">
+                    Part {activePart.index} of {parts.length}:{" "}
+                  </span>
+                  {activePart.zipName} · {plural(activePart.fileCount, "file")}
+                  {savedParts > 0 && ` · ${savedParts} saved`}
+                </p>
+              )}
               {phase === "downloading" && activeFiles.length > 0 && (
                 <p className="mt-2 truncate text-xs font-light text-muted">
                   <span className="font-medium text-ink">Now: </span>
@@ -288,7 +319,13 @@ export default function ProgressPanel({
         {confirmingCancel && (
           <div className="border-b border-line bg-canvas px-5 py-3">
             <p className="text-sm text-ink">
-              Cancel this download? The partial ZIP will be discarded.
+              {isSplit
+                ? `Cancel this download? ${
+                    savedParts > 0
+                      ? `The ${plural(savedParts, "part")} already saved will stay on disk; the part in progress`
+                      : "The part in progress"
+                  } will be discarded.`
+                : "Cancel this download? The partial ZIP will be discarded."}
             </p>
             <div className="mt-2.5 flex gap-2">
               <button
@@ -313,12 +350,32 @@ export default function ProgressPanel({
         {/* Result banners */}
         {phase === "error" && errorMessage && (
           <div className="border-b border-error/20 bg-error/5 px-5 py-3">
-            <p className="text-sm text-error">{errorMessage}</p>
-            {settled > 0 && (
+            <p className="text-sm text-error">
+              {isSplit && activePart ? `Part ${activePart.index} of ${parts.length} failed: ` : ""}
+              {errorMessage}
+            </p>
+            {canResume ? (
               <p className="mt-1 text-xs font-light text-muted">
-                {completedFiles.toLocaleString()} of {totalFiles.toLocaleString()} files had
-                been fetched before the failure. Nothing was saved.
+                {savedParts > 0
+                  ? `${plural(savedParts, "part")} (${plural(
+                      parts
+                        .filter((p) => p.status === "complete")
+                        .reduce((n, p) => n + p.fileCount, 0),
+                      "file"
+                    )}) ${savedParts === 1 ? "is" : "are"} safely saved${
+                      saveFolder ? ` in "${saveFolder}"` : ""
+                    }. `
+                  : ""}
+                Resume to continue from part {activePart?.index ?? currentPart} without
+                re-downloading them.
               </p>
+            ) : (
+              settled > 0 && (
+                <p className="mt-1 text-xs font-light text-muted">
+                  {completedFiles.toLocaleString()} of {totalFiles.toLocaleString()} files had
+                  been fetched before the failure. Nothing was saved.
+                </p>
+              )
             )}
           </div>
         )}
@@ -332,7 +389,14 @@ export default function ProgressPanel({
           >
             <p>
               Saved {plural(completedFiles, "file")}
-              {zipName ? ` to ${zipName}` : ""}.
+              {isSplit
+                ? ` in ${plural(parts.length, "ZIP file")}${
+                    saveFolder ? ` to the folder "${saveFolder}"` : ""
+                  }`
+                : zipName
+                ? ` to ${zipName}`
+                : ""}
+              .
               {failedFiles > 0 && (
                 <>
                   {" "}
@@ -351,7 +415,13 @@ export default function ProgressPanel({
                       ? `; ${keptOriginal.toLocaleString()} kept as original (no text to extract)`
                       : "") +
                     ". "}
-                {reportIncluded && `A list is included in the archive as "${REPORT_FILENAME}".`}
+                {reportIncluded &&
+                  (isSplit
+                    ? `Each affected archive contains a "${REPORT_FILENAME}".`
+                    : `A list is included in the archive as "${REPORT_FILENAME}".`)}
+                {isSplit &&
+                  saveMode === "directory" &&
+                  ` A summary of all parts is saved as "${RUN_REPORT_FILENAME}" next to them.`}
               </p>
             )}
           </div>
@@ -365,6 +435,8 @@ export default function ProgressPanel({
             </div>
           ) : (
             <>
+              {isSplit && <PartsSection parts={parts} phase={phase} />}
+
               {failures.length > 0 && (
                 <section aria-label="Failed files" className="border-b border-line">
                   <h3 className="flex items-center gap-2 bg-error/5 px-5 py-2 text-xs font-semibold uppercase tracking-wider text-error">
@@ -442,8 +514,10 @@ export default function ProgressPanel({
                 autoFocus
                 className="flex flex-[2] items-center justify-center gap-2 rounded-sm bg-brand px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark"
               >
-                <FileArchive size={16} />
-                Save ZIP · {plural(totalFiles, "file")}
+                {isSplit ? <FolderDown size={16} /> : <FileArchive size={16} />}
+                {isSplit
+                  ? `Choose folder · ${plural(parts.length, "ZIP file")}`
+                  : `Save ZIP · ${plural(totalFiles, "file")}`}
               </button>
             </div>
           ) : isActive ? (
@@ -457,6 +531,17 @@ export default function ProgressPanel({
             </button>
           ) : (
             <div className="flex flex-col gap-3">
+              {phase === "error" && canResume && (
+                <button
+                  type="button"
+                  onClick={onResume}
+                  autoFocus
+                  className="flex w-full items-center justify-center gap-2 rounded-sm bg-brand px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark"
+                >
+                  <Play size={16} />
+                  Resume from part {activePart?.index ?? currentPart} of {parts.length}
+                </button>
+              )}
               {phase === "complete" && failedFiles > 0 && (
                 <button
                   type="button"
@@ -500,12 +585,14 @@ export default function ProgressPanel({
 function ReviewSummary({
   totalFiles,
   folderCount,
+  partCount,
   excludedCount,
   convertToMd,
   convertibleTotal,
 }: {
   totalFiles: number;
   folderCount: number;
+  partCount: number;
   excludedCount: number;
   convertToMd: boolean;
   convertibleTotal: number;
@@ -520,12 +607,21 @@ function ReviewSummary({
             downloaded.
           </p>
           <p className="mt-0.5 text-xs font-light text-muted">
-            Check the list below, then choose where to save the ZIP. Nothing is fetched
-            until you confirm.
+            {partCount > 1
+              ? "Check the list below, then choose a folder to save into. Nothing is fetched until you confirm."
+              : "Check the list below, then choose where to save the ZIP. Nothing is fetched until you confirm."}
           </p>
         </div>
       </div>
       <ul className="space-y-1 pl-7 text-xs font-light text-muted">
+        {partCount > 1 && (
+          <li>
+            <span className="font-medium text-ink">Large download:</span> it will be split
+            into {plural(partCount, "ZIP file")} of up to {PART_MAX_FILES.toLocaleString()}{" "}
+            files each, saved into the folder you choose. Each part is safely on disk before
+            the next begins, and a failed part can be resumed without redoing the others.
+          </li>
+        )}
         {convertToMd ? (
           <li>
             <span className="font-medium text-ink">Markdown conversion is on:</span>{" "}
@@ -545,6 +641,60 @@ function ReviewSummary({
       </ul>
     </div>
   );
+}
+
+function PartsSection({ parts, phase }: { parts: PartProgress[]; phase: DownloadPhase }) {
+  const saved = parts.filter((p) => p.status === "complete").length;
+  return (
+    <section aria-label="ZIP files" className="border-b border-line">
+      <h3 className="flex items-center justify-between px-5 py-2 text-xs font-semibold uppercase tracking-wider text-muted">
+        <span className="flex items-center gap-2">
+          <FileArchive size={13} />
+          {plural(parts.length, "ZIP file")}
+        </span>
+        {phase !== "review" && (
+          <span className="font-light normal-case tracking-normal">
+            {saved} of {parts.length} saved
+          </span>
+        )}
+      </h3>
+      <ul className="divide-y divide-line border-t border-line bg-canvas/40">
+        {parts.map((part) => (
+          <li key={part.index} className="flex items-center gap-3 py-2 pl-5 pr-5">
+            <PartStatusIcon status={part.status} phase={phase} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm text-ink">{part.zipName}</p>
+              <p className="truncate text-xs font-light text-muted">
+                {plural(part.fileCount, "file")}
+                {part.status === "writing" && " · writing…"}
+                {part.status === "complete" && " · saved"}
+                {part.status === "error" && (
+                  <span className="text-error"> · failed — resume to retry this part</span>
+                )}
+              </p>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function PartStatusIcon({ status, phase }: { status: PartProgress["status"]; phase: DownloadPhase }) {
+  switch (status) {
+    case "complete":
+      return <CheckCircle2 size={15} className="shrink-0 text-success" />;
+    case "error":
+      return <XCircle size={15} className="shrink-0 text-error" />;
+    case "writing":
+      return <Loader2 size={15} className="shrink-0 animate-spin text-brand" />;
+    case "pending":
+      return phase === "review" ? (
+        <FileArchive size={15} className="shrink-0 text-brand" />
+      ) : (
+        <Clock size={15} className="shrink-0 text-muted/40" />
+      );
+  }
 }
 
 function FolderGroupRow({

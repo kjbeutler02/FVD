@@ -1,4 +1,5 @@
 import { API_ROOT, IDENTITY_URL } from "./constants";
+import { SessionError } from "./session";
 
 /**
  * A failed Filevine API call. `upstreamStatus` lets API routes translate the
@@ -20,6 +21,11 @@ export class FilevineError extends Error {
  * other upstream failures are 502; anything else is a 500.
  */
 export function statusForError(err: unknown): number {
+  // Match by name as well as class so a duplicated module instance (bundler
+  // chunking, test runners) can never turn a session problem into a 500.
+  if (err instanceof SessionError || (err instanceof Error && err.name === "SessionError")) {
+    return 401;
+  }
   const message = err instanceof Error ? err.message : "";
   if (message.includes("expired") || message.includes("JWS") || message.includes("JWT")) return 401;
   if (err instanceof FilevineError) {

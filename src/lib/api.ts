@@ -1,5 +1,5 @@
 import type { FolderNode, DocumentItem, DocumentPage, LocatorResult } from "@/types/filevine";
-import { FOLDER_SCAN_CONCURRENCY, SCAN_RETRIES } from "@/lib/constants";
+import { FOLDER_SCAN_CONCURRENCY, SCAN_RETRIES, SESSION_REFRESH_MARGIN_SECONDS } from "@/lib/constants";
 
 export { displayFolderPath as buildFolderPath } from "@/lib/zipPath";
 
@@ -70,9 +70,33 @@ async function errorFromResponse(res: Response, fallback: string): Promise<HttpE
 /* ------------------------------------------------------------- session */
 
 let sessionToken: string | null = null;
+// Expiry (ms since epoch) of `sessionToken`, read from its `exp` claim; 0 if unknown.
+let sessionExpiresAt = 0;
 // Concurrent 401s (four downloads hitting an expired token at once) share a
 // single refresh instead of each minting a new session.
 let refreshInFlight: Promise<string> | null = null;
+
+/** The `exp` claim of a JWT as ms since epoch, or 0 if it can't be read. */
+function tokenExpiry(token: string): number {
+  try {
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(payload));
+    return typeof claims.exp === "number" ? claims.exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Whether the current token is still safely usable. Tokens are refreshed a
+ * margin before they expire so a multi-hour download never sends a request
+ * with a token that dies in flight.
+ */
+function tokenIsFresh(): boolean {
+  if (!sessionToken) return false;
+  if (sessionExpiresAt === 0) return true;
+  return Date.now() < sessionExpiresAt - SESSION_REFRESH_MARGIN_SECONDS * 1000;
+}
 
 function refreshSession(): Promise<string> {
   if (!refreshInFlight) {
@@ -88,6 +112,7 @@ function refreshSession(): Promise<string> {
       }
       const data = await res.json();
       sessionToken = data.sessionToken;
+      sessionExpiresAt = tokenExpiry(sessionToken!);
       return sessionToken!;
     })().finally(() => {
       refreshInFlight = null;
@@ -97,7 +122,7 @@ function refreshSession(): Promise<string> {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  if (!sessionToken) {
+  if (!tokenIsFresh()) {
     await refreshSession();
   }
   return { Authorization: `Bearer ${sessionToken}` };
