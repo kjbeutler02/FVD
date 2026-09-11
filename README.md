@@ -11,12 +11,24 @@ converting documents (PDF, Word, text, CSV, …) to Markdown on the way.
    will be converted to Markdown.
 2. **Save ZIP** asks where to save (Chromium) and streams the archive to disk;
    other browsers fall back to an in-memory Blob save.
-3. Files are fetched four at a time with retries (throttling backs off longer).
+3. **Large runs are split into parts.** Above 1,000 files (`PART_MAX_FILES`)
+   the run is divided into ZIPs of at most 1,000 files each, named
+   `…-part-01-of-12.zip`. You pick a **folder** once; each part is streamed
+   into it and is safely on disk before the next begins. Parts follow the
+   folder order, so each covers a contiguous range of Filevine folders. A
+   `_DOWNLOAD REPORT.txt` in the folder lists every part and anything missing.
+   If a part fails (disk full, network gone), the finished parts stay and
+   **Resume from part N** carries on without re-fetching them.
+4. Files are fetched four at a time with retries (throttling backs off longer).
    Folder and file names are sanitised so the ZIP extracts cleanly on Windows;
    duplicates are suffixed ` (2)`, ` (3)`, ….
-4. If anything fails, the missing files are listed in the drawer and in
+5. If anything fails, the missing files are listed in the drawer and in
    `_DOWNLOAD REPORT.txt` inside the archive, and **Retry failed files** fetches
    just those into a second ZIP.
+6. The internal Filevine session token lives 15 minutes. The client renews it
+   90 seconds before expiry, and the API routes answer an expired token with
+   `401` (never `500`) so the client refreshes and retries instead of failing
+   the file. Long runs are unaffected by the token lifetime.
 
 Sign-in uses **Microsoft Entra ID** (the firm's M365 tenant) via Auth.js.
 
