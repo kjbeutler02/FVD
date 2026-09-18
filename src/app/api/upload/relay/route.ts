@@ -39,10 +39,15 @@ export async function POST(request: Request) {
     if (!staged || staged.statusCode !== 200 || !staged.stream) {
       return NextResponse.json({ error: "The staged file could not be read" }, { status: 400 });
     }
-    if (staged.blob.size !== ticket.size) {
+    // Private-store reads report size 0 in `blob`; the response header is the
+    // reliable figure. If it disagrees with the ticket, refuse rather than
+    // send a truncated or padded file (S3 would also reject a length mismatch).
+    const headerLength = Number(staged.headers.get("content-length"));
+    const stagedSize = Number.isFinite(headerLength) && headerLength > 0 ? headerLength : staged.blob.size;
+    if (stagedSize > 0 && stagedSize !== ticket.size) {
       await del(blobUrl).catch(() => {});
       return NextResponse.json(
-        { error: `Staged file is ${staged.blob.size} bytes but the upload was declared as ${ticket.size}` },
+        { error: `Staged file is ${stagedSize} bytes but the upload was declared as ${ticket.size}` },
         { status: 400 }
       );
     }
