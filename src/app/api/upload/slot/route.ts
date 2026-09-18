@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { filevineHeadersFromRequest } from "@/lib/routeAuth";
 import { createUploadSlot, findUserIdByEmail, statusForError } from "@/lib/filevine";
+import { signUploadTicket } from "@/lib/uploadTicket";
 
 // Filevine user ids by signed-in email, so uploads are attributed to the
 // person who sent them rather than to the shared API credential. Cached per
@@ -29,8 +30,11 @@ async function uploaderIdFor(
 
 /**
  * Step 1 of an upload: ask Filevine for a pending document and a pre-signed
- * storage URL. The browser PUTs the bytes to that URL directly (they never
- * pass through this server), then calls /api/upload/commit.
+ * storage URL. The URL is sealed into a signed ticket; the browser then sends
+ * the bytes to /api/upload/put (small files) or stages them in Vercel Blob and
+ * calls /api/upload/relay (large files), and finally /api/upload/commit.
+ * Filevine's storage bucket allows no cross-origin requests, so the browser
+ * can never PUT to it directly.
  */
 export async function POST(request: Request) {
   let body: { projectId?: unknown; folderId?: unknown; filename?: unknown; size?: unknown };
@@ -66,7 +70,19 @@ export async function POST(request: Request) {
       { projectId, folderId, filename: filename.trim(), size, uploaderId },
       headers
     );
-    return NextResponse.json({ ...slot, attributed: uploaderId != null });
+    const contentType = slot.contentType || "application/octet-stream";
+    const ticket = await signUploadTicket({
+      url: slot.url,
+      documentId: slot.documentId,
+      size,
+      contentType,
+    });
+    return NextResponse.json({
+      documentId: slot.documentId,
+      contentType,
+      ticket,
+      attributed: uploaderId != null,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to start upload";
     return NextResponse.json({ error: message }, { status: statusForError(err) });

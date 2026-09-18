@@ -3,8 +3,12 @@ import {
   requestUploadSlot,
   commitUpload,
   createFolderApi,
-  putToStorage,
+  sendViaRelay,
+  sendViaBlob,
   isUploadRetryable,
+  StorageError,
+  type UploadSlotResponse,
+  type UploadConfig,
 } from "@/lib/uploadApi";
 import { retryDelay } from "@/lib/api";
 import { UPLOAD_CONCURRENCY, UPLOAD_MAX_RETRIES } from "@/lib/constants";
@@ -148,7 +152,8 @@ export class UploadQueue {
   constructor(
     private readonly folders: FolderResolver,
     private readonly signal: AbortSignal,
-    private readonly events: QueueEvents
+    private readonly events: QueueEvents,
+    private readonly config: UploadConfig
   ) {}
 
   get size(): number {
@@ -179,8 +184,20 @@ export class UploadQueue {
 
   private async process(item: QueueItem): Promise<void> {
     const { lf, dest } = item;
-    const { signal, events } = this;
+    const { signal, events, config } = this;
     let attempts = 0;
+    // One pending Filevine document per file: the slot is reused across
+    // retries and only re-requested if its storage link has expired.
+    let slot: UploadSlotResponse | null = null;
+    let folderId: number | null = null;
+
+    if (lf.size > config.relayMaxBytes && !config.largeFiles) {
+      const limitMb = Math.round(config.relayMaxBytes / 1024 / 1024);
+      const message = `Over ${limitMb} MB — large-file uploads are not set up on this deployment yet`;
+      events.update(lf.id, { status: "error", error: message, attempts: 0 });
+      events.settled(item, { status: "error", error: message });
+      return;
+    }
 
     for (;;) {
       attempts++;
@@ -188,30 +205,36 @@ export class UploadQueue {
         if (signal.aborted) throw new DOMException("Aborted", "AbortError");
         events.update(lf.id, { status: "preparing", attempts, fraction: 0, error: undefined });
 
-        const folderId = await this.folders.ensure(dest.folderId, lf.relDir, signal);
-        const slot = await requestUploadSlot(
-          { projectId: dest.projectId, folderId, filename: lf.name, size: lf.size },
-          signal
-        );
-        events.attributed(slot.attributed);
+        if (folderId == null) folderId = await this.folders.ensure(dest.folderId, lf.relDir, signal);
+        if (!slot) {
+          slot = await requestUploadSlot(
+            { projectId: dest.projectId, folderId, filename: lf.name, size: lf.size },
+            signal
+          );
+          events.attributed(slot.attributed);
+        }
 
         events.update(lf.id, { status: "uploading" });
         // A file handle (watch mode) is re-read at send time so we never send
         // a stale snapshot of a file that has since been rewritten.
         const blob = lf.handle ? await lf.handle.getFile() : lf.file;
-        const contentType = slot.contentType || lf.file.type || "application/octet-stream";
-        await putToStorage(
-          slot.url,
-          blob,
-          contentType,
-          (loaded) => events.update(lf.id, { fraction: lf.size > 0 ? Math.min(1, loaded / lf.size) : 1 }),
-          signal
-        );
+        if (blob.size !== lf.size) {
+          throw new Error("The file changed size while waiting to upload; it will be picked up again");
+        }
+        const onProgress = (loaded: number) =>
+          events.update(lf.id, { fraction: lf.size > 0 ? Math.min(1, loaded / lf.size) : 1 });
+        if (lf.size <= config.relayMaxBytes) {
+          await sendViaRelay(slot.ticket, blob, slot.contentType, onProgress, signal);
+        } else {
+          await sendViaBlob(slot.ticket, blob, lf.name, onProgress, signal);
+        }
 
         events.update(lf.id, { status: "committing", fraction: 1 });
-        const committed = await this.commitWithRetry(
-          { projectId: dest.projectId, folderId, documentId: slot.documentId }
-        );
+        const committed = await this.commitWithRetry({
+          projectId: dest.projectId,
+          folderId,
+          documentId: slot.documentId,
+        });
 
         events.update(lf.id, { status: "complete", documentId: committed.documentId });
         events.settled(item, { status: "complete", documentId: committed.documentId });
@@ -221,6 +244,8 @@ export class UploadQueue {
           events.update(lf.id, { status: "pending", fraction: 0 });
           return;
         }
+        // An expired storage link means the pending document is stale too.
+        if (err instanceof StorageError && err.status === 403) slot = null;
         if (attempts < UPLOAD_MAX_RETRIES && isUploadRetryable(err)) {
           try {
             await sleep(retryDelay(err, attempts), signal);

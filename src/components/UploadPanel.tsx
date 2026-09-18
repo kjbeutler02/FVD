@@ -133,13 +133,17 @@ export default function UploadPanel({
     () => [...progress.files.values()].filter((f) => f.duplicate === "same-name").length,
     [progress.files]
   );
-  const toUpload = progress.totalFiles - progress.skippedFiles;
+  const preflightFailed = useMemo(
+    () => (isReview ? [...progress.files.values()].filter((f) => f.status === "error").length : 0),
+    [isReview, progress.files]
+  );
+  const toUpload = progress.totalFiles - progress.skippedFiles - preflightFailed;
   const bytesToUpload = useMemo(
     () =>
       [...progress.files.values()]
-        .filter((f) => f.status !== "skipped")
+        .filter((f) => f.status !== "skipped" && !(isReview && f.status === "error"))
         .reduce((n, f) => n + f.size, 0),
-    [progress.files]
+    [progress.files, isReview]
   );
 
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
@@ -221,6 +225,7 @@ export default function UploadPanel({
                   bytesToUpload={bytesToUpload}
                   identical={identical}
                   sameName={sameName}
+                  tooLarge={preflightFailed}
                   onToggleDuplicates={onToggleDuplicates}
                 />
               )}
@@ -587,6 +592,7 @@ function ReviewSummary({
   bytesToUpload,
   identical,
   sameName,
+  tooLarge,
   onToggleDuplicates,
 }: {
   progress: UploadProgress;
@@ -594,9 +600,11 @@ function ReviewSummary({
   bytesToUpload: number;
   identical: number;
   sameName: number;
+  tooLarge: number;
   onToggleDuplicates: (v: boolean) => void;
 }) {
   const folders = progress.foldersToCreate;
+  const limits = progress.limits;
   return (
     <div className="mt-4 space-y-2">
       <div className="flex items-start gap-2.5">
@@ -607,11 +615,22 @@ function ReviewSummary({
             {progress.destination?.folderPath || "the project root"}.
           </p>
           <p className="mt-0.5 text-xs font-light text-muted">
-            Nothing is sent until you confirm. Files go straight from this computer to Filevine.
+            Nothing is sent until you confirm.
           </p>
         </div>
       </div>
       <ul className="space-y-1 pl-7 text-xs font-light text-muted">
+        {tooLarge > 0 && limits && (
+          <li className="text-error">
+            <span className="font-medium">
+              {plural(tooLarge, "file")} {tooLarge === 1 ? "is" : "are"} too large to upload
+            </span>{" "}
+            {limits.largeFiles
+              ? `(limit ${formatBytes(limits.largeFileMaxBytes)}).`
+              : `— files over ${formatBytes(limits.relayMaxBytes)} need the large-file store, which is not set up on this deployment yet.`}{" "}
+            {tooLarge === 1 ? "It is" : "They are"} listed under “Not uploaded”.
+          </li>
+        )}
         {folders.length > 0 && (
           <li>
             <span className="font-medium text-ink">

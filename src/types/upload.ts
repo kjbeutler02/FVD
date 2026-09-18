@@ -72,6 +72,8 @@ export interface UploadProgress {
   checkToken: number;
   /** Whether Filevine attributed the uploads to the signed-in user (vs. the shared credential). */
   attributed: boolean | null;
+  /** Size limits of this deployment; null until loaded. */
+  limits: { relayMaxBytes: number; largeFiles: boolean; largeFileMaxBytes: number } | null;
   errorMessage?: string;
 }
 

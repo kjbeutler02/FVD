@@ -133,6 +133,11 @@ async function authHeaders(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${sessionToken}` };
 }
 
+/** The Authorization header value for a request made outside fetchWithAuth (e.g. XHR). */
+export async function currentAuthHeader(): Promise<string> {
+  return (await authHeaders()).Authorization;
+}
+
 export async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
   const tokenBefore = sessionToken;
   const headers = await authHeaders();
