@@ -34,7 +34,30 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ tree, flatMap, totalCount: Object.keys(flatMap).length });
+    // The project's root document folder is not itself in the list; it is the
+    // parent every top-level folder points at. Uploads to "All Folders" go there.
+    const parentVotes = new Map<number, number>();
+    for (const item of rawItems) {
+      const parentId = item.parentId?.native;
+      if (parentId != null && !flatMap[parentId]) {
+        parentVotes.set(parentId, (parentVotes.get(parentId) ?? 0) + 1);
+      }
+    }
+    let rootFolderId: number | null = null;
+    let best = 0;
+    for (const [id, votes] of parentVotes) {
+      if (votes > best) {
+        best = votes;
+        rootFolderId = id;
+      }
+    }
+
+    return NextResponse.json({
+      tree,
+      flatMap,
+      rootFolderId,
+      totalCount: Object.keys(flatMap).length,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch folders";
     const status = statusForError(err);

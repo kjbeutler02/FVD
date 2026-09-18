@@ -10,7 +10,7 @@ Authorized Strong & Hanni law firm personnel — attorneys, paralegals, and staf
 
 ## Product Purpose
 
-A single-purpose internal utility: authenticate, open a Filevine project, browse its folder structure, choose what to pull, and download it as a folder-structured ZIP. Download-only — no uploading, editing, or syncing. Success is a staffer who lands, recognizes the firm's brand, finds the folders they need without instruction, and walks away with the right ZIP on the first try.
+An internal utility: authenticate, open a Filevine project, browse its folder structure, and move documents in either direction — pull a selection down as a folder-structured ZIP, or push files from this computer up into a chosen Filevine folder (one batch at a time, or by watching a local folder while the tab is open). No editing of documents. Success is a staffer who lands, recognizes the firm's brand, finds the folders they need without instruction, and gets the right files where they belong on the first try.
 
 ## Brand Personality
 
