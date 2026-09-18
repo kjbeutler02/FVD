@@ -7,6 +7,7 @@ import {
   downloadFileViaProxy,
   fetchAllDocuments,
   fetchDocumentsByFolders,
+  resolveMissingFolders,
   isRetryable,
   retryDelay,
 } from "@/lib/api";
@@ -97,6 +98,7 @@ function initialProgress(): DownloadProgress {
     parts: [],
     canResume: false,
     reportIncluded: false,
+    unknownFolderDocs: 0,
   };
 }
 
@@ -307,10 +309,35 @@ export function useDownloadOrchestrator() {
         return;
       }
 
+      // The project's folder list can miss folders (deleted, moved, or not
+      // visible to the list call). Look those up individually so every
+      // document keeps its real path; whatever still cannot be identified is
+      // counted and grouped under "_Unknown folder <id>" rather than dumped
+      // at the archive root. The run works on its own copy of the map.
+      const flatMap: FolderFlatMap = { ...folderFlatMap };
+      let unknownFolderDocs = 0;
+      try {
+        unknownFolderDocs = await resolveMissingFolders(
+          docs,
+          flatMap,
+          controller.signal,
+          (done, total) => commit(runId, (prev) => ({ ...prev, resolvingFolders: { done, total } }))
+        );
+      } catch (err) {
+        if (controller.signal.aborted || isAbort(err)) {
+          commit(runId, (prev) => ({ ...prev, phase: "idle" }));
+          return;
+        }
+      }
+      if (controller.signal.aborted) {
+        commit(runId, (prev) => ({ ...prev, phase: "idle" }));
+        return;
+      }
+
       // Stable, predictable archive order: by folder path, then filename.
       const pathOf = new Map<number, string>();
       for (const d of docs) {
-        if (!pathOf.has(d.folderId)) pathOf.set(d.folderId, displayFolderPath(d.folderId, folderFlatMap));
+        if (!pathOf.has(d.folderId)) pathOf.set(d.folderId, displayFolderPath(d.folderId, flatMap));
       }
       docs.sort(
         (a, b) =>
@@ -320,7 +347,7 @@ export function useDownloadOrchestrator() {
 
       const run: PendingRun = {
         docs,
-        folderFlatMap,
+        folderFlatMap: flatMap,
         projectId,
         convertToMd,
         zipName: `filevine-project-${projectId}.zip`,
@@ -334,10 +361,12 @@ export function useDownloadOrchestrator() {
         ...prev,
         phase: "review",
         totalFiles: docs.length,
-        files: buildFileMap(parts, folderFlatMap),
+        files: buildFileMap(parts, flatMap),
         parts: buildPartProgress(parts, run.zipName),
         excludedCount,
         zipName: run.zipName,
+        resolvingFolders: undefined,
+        unknownFolderDocs,
       }));
     },
     [beginRun, commit]

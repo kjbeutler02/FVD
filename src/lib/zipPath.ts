@@ -6,6 +6,8 @@
  * wrong folder. Every path component is normalised before it enters the ZIP.
  */
 
+import { UNKNOWN_FOLDER_PREFIX } from "./constants";
+
 const ILLEGAL_CHARS = /[<>:"/\\|?*\x00-\x1f]/g;
 const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
@@ -30,11 +32,18 @@ export function sanitizeSegment(name: string): string {
   return out;
 }
 
-/** Folder path components (top-level first) for a document's folder. */
+/**
+ * Folder path components (top-level first) for a document's folder. A folder
+ * the map does not know about is never silently dropped to the root: the
+ * document goes under "_Unknown folder <id>" so it is grouped and traceable.
+ * Documents Filevine reports with no folder at all (id 0) stay at the root.
+ */
 export function folderPathParts(
   folderId: number,
   flatMap: Record<number, { name: string; parentId: number | null }>
 ): string[] {
+  if (folderId && !flatMap[folderId]) return [`${UNKNOWN_FOLDER_PREFIX} ${folderId}`];
+
   const parts: string[] = [];
   let cur: number | null = folderId;
   const visited = new Set<number>();

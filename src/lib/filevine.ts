@@ -1,4 +1,4 @@
-import { API_ROOT, IDENTITY_URL } from "./constants";
+import { API_ROOT, IDENTITY_URL, FOLDER_PAGE_SIZE } from "./constants";
 import { SessionError } from "./session";
 
 /**
@@ -110,23 +110,77 @@ export async function getOrgAndUserIds(
   return { orgId, userId };
 }
 
+// Filevine throttles bursts (HTTP 429) even at modest rates. Paging a folder
+// list or resolving folders one by one can trip it, so upstream calls that
+// run in loops back off and retry a few times before giving up.
+const THROTTLE_RETRIES = 4;
+const THROTTLE_BASE_DELAY_MS = 1500;
+
+async function fetchWithBackoff(url: string, headers: Record<string, string>): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(url, { headers });
+    if (res.status !== 429 || attempt > THROTTLE_RETRIES) return res;
+    const retryAfter = Number(res.headers.get("Retry-After"));
+    const delay =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : THROTTLE_BASE_DELAY_MS * 2 ** (attempt - 1);
+    await new Promise((r) => setTimeout(r, Math.min(delay, 20_000)));
+  }
+}
+
+/**
+ * Every folder in a project, archived ones included. Filevine pages this list
+ * (`hasMore` + `offset`); stopping after the first page silently dropped the
+ * paths of every document in a folder beyond it. Archived folders are
+ * included so documents inside them still get a real path; callers that
+ * present a browsable tree filter them out.
+ */
 export async function fetchFolderTree(
   projectId: number,
-  headers: Record<string, string>
-): Promise<unknown[]> {
-  const url = `${API_ROOT}/Folders/list?projectId=${projectId}&includeArchivedFolders=false`;
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    throw new FilevineError(`Failed to fetch folders: ${res.status}`, res.status);
+  headers: Record<string, string>,
+  pageSize: number = FOLDER_PAGE_SIZE
+): Promise<RawFolderItem[]> {
+  const items: RawFolderItem[] = [];
+  let offset = 0;
+  for (;;) {
+    const params = new URLSearchParams({
+      projectId: String(projectId),
+      includeArchivedFolders: "true",
+      limit: String(pageSize),
+      offset: String(offset),
+    });
+    const res = await fetchWithBackoff(`${API_ROOT}/Folders/list?${params}`, headers);
+    if (!res.ok) {
+      throw new FilevineError(`Failed to fetch folders: ${res.status}`, res.status);
+    }
+    const data = await res.json();
+    const page: RawFolderItem[] = data.items ?? [];
+    items.push(...page);
+    if (!data.hasMore || page.length === 0) break;
+    offset += page.length;
   }
-  const data = await res.json();
-  return data.items ?? [];
+  return items;
+}
+
+/** One folder by id, or null if Filevine no longer has it. */
+export async function fetchFolder(
+  folderId: number,
+  headers: Record<string, string>
+): Promise<RawFolderItem | null> {
+  const res = await fetchWithBackoff(`${API_ROOT}/Folders/${folderId}`, headers);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new FilevineError(`Failed to fetch folder ${folderId}: ${res.status}`, res.status);
+  }
+  return res.json();
 }
 
 export interface RawFolderItem {
   folderId?: { native?: number };
   parentId?: { native?: number } | null;
   name?: string;
+  isArchived?: boolean;
 }
 
 export interface FolderTreeNode {

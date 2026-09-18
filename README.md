@@ -19,13 +19,20 @@ converting documents (PDF, Word, text, CSV, …) to Markdown on the way.
    `_DOWNLOAD REPORT.txt` in the folder lists every part and anything missing.
    If a part fails (disk full, network gone), the finished parts stay and
    **Resume from part N** carries on without re-fetching them.
-4. Files are fetched four at a time with retries (throttling backs off longer).
+4. **Folder structure is preserved.** The project's folder list is fetched in
+   full (Filevine pages it at 1,000 folders; archived folders are included for
+   path lookup but hidden from the browser). Any folder a document references
+   that the list did not cover is looked up individually, following parent
+   chains, before the review step. A folder that still cannot be identified
+   is never silently dropped to the root: its documents go under
+   `_Unknown folder <id>` and the review screen shows the count.
+5. Files are fetched four at a time with retries (throttling backs off longer).
    Folder and file names are sanitised so the ZIP extracts cleanly on Windows;
    duplicates are suffixed ` (2)`, ` (3)`, ….
-5. If anything fails, the missing files are listed in the drawer and in
+6. If anything fails, the missing files are listed in the drawer and in
    `_DOWNLOAD REPORT.txt` inside the archive, and **Retry failed files** fetches
    just those into a second ZIP.
-6. The internal Filevine session token lives 15 minutes. The client renews it
+7. The internal Filevine session token lives 15 minutes. The client renews it
    90 seconds before expiry, and the API routes answer an expired token with
    `401` (never `500`) so the client refreshes and retries instead of failing
    the file. Long runs are unaffected by the token lifetime.

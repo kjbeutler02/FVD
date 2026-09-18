@@ -28,3 +28,14 @@ export const FOLDER_SCOPED_MAX = 100;
 export const PART_MAX_FILES = 1000;
 // Name of the folder-level summary written next to the parts of a split run.
 export const RUN_REPORT_FILENAME = "_DOWNLOAD REPORT.txt";
+
+// Folder list paging: Filevine returns at most this many folders per page.
+// Every page is fetched so projects with thousands of folders keep their paths.
+export const FOLDER_PAGE_SIZE = 1000;
+// Documents in folders the list did not cover (deleted, moved, permissions)
+// are resolved one folder at a time: ids per request, and upstream fetches
+// in flight per request.
+export const FOLDER_RESOLVE_BATCH = 25;
+export const FOLDER_RESOLVE_CONCURRENCY = 4;
+// Archive folder for documents whose Filevine folder could not be identified.
+export const UNKNOWN_FOLDER_PREFIX = "_Unknown folder";
