@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { fetchDocumentsForFolder } from "@/lib/api";
+import { fetchUploadConfig, type UploadConfig } from "@/lib/uploadApi";
 import { FolderResolver, UploadQueue, type CreatedFolder, type FolderFlatMap } from "@/lib/uploadQueue";
 import { filesFromDirectoryHandle, moveToDone } from "@/lib/localFiles";
 import {
@@ -41,7 +42,43 @@ function initialProgress(): UploadProgress {
     checkingDuplicates: false,
     checkToken: 0,
     attributed: null,
+    limits: null,
   };
+}
+
+// Deployment limits are fetched once per page and reused by every batch/watch.
+let configPromise: Promise<UploadConfig> | null = null;
+function loadConfig(): Promise<UploadConfig> {
+  if (!configPromise) {
+    configPromise = fetchUploadConfig().catch((err) => {
+      configPromise = null;
+      throw err;
+    });
+  }
+  return configPromise;
+}
+
+/** Files this deployment cannot take are marked as failed before anything is sent. */
+function applyLimits(
+  files: Map<string, UploadFileProgress>,
+  limits: UploadConfig
+): Map<string, UploadFileProgress> {
+  const next = new Map(files);
+  for (const [id, f] of next) {
+    const tooBig =
+      f.size > limits.largeFileMaxBytes || (f.size > limits.relayMaxBytes && !limits.largeFiles);
+    if (tooBig && f.status !== "error") {
+      const mb = Math.round((limits.largeFiles ? limits.largeFileMaxBytes : limits.relayMaxBytes) / 1024 / 1024);
+      next.set(id, {
+        ...f,
+        status: "error",
+        error: limits.largeFiles
+          ? `Over the ${mb.toLocaleString()} MB limit`
+          : `Over ${mb} MB — large-file uploads are not set up on this deployment yet`,
+      });
+    }
+  }
+  return next;
 }
 
 function targetPath(dest: UploadDestination, relDir: string[]): string {
@@ -215,6 +252,10 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
         const next = new Map(prev.files);
         for (const [id, f] of next) {
           const dup = marks.get(id);
+          if (f.status === "error") {
+            next.set(id, { ...f, duplicate: dup }); // pre-flight failure (size) stands
+            continue;
+          }
           const status = dup === "identical" && !prev.uploadDuplicates ? "skipped" : "pending";
           next.set(id, { ...f, duplicate: dup, status });
         }
@@ -251,8 +292,18 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
         // The duplicate check runs from an effect keyed on this token.
         checkingDuplicates: files.length > 0,
         checkToken: prev.checkToken + 1,
+        limits: prev.limits,
         ...tally(map),
       }));
+      void loadConfig().then(
+        (limits) =>
+          setProgress((prev) => {
+            if (prev.phase !== "review") return prev;
+            const next = applyLimits(prev.files, limits);
+            return { ...prev, limits, files: next, ...tally(next) };
+          }),
+        () => {}
+      );
     },
     []
   );
@@ -298,8 +349,9 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
             .map((f) => targetPath(dest, f.relDir))
         ),
       ].sort();
-      const map = new Map(prev.files);
+      let map = new Map(prev.files);
       for (const f of fresh) map.set(f.id, toProgress(f, dest));
+      if (prev.limits) map = applyLimits(map, prev.limits);
       return {
         ...prev,
         files: map,
@@ -342,9 +394,20 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
   }, []);
 
   const runBatch = useCallback(
-    (ids: string[]) => {
+    async (ids: string[]) => {
       const dest = progress.destination;
       if (!dest) return;
+      let config: UploadConfig;
+      try {
+        config = await loadConfig();
+      } catch (err) {
+        setProgress((prev) => ({
+          ...prev,
+          phase: "error",
+          errorMessage: err instanceof Error ? err.message : "Could not read upload settings",
+        }));
+        return;
+      }
       const controller = new AbortController();
       batchAbortRef.current = controller;
       const runId = ++batchRunIdRef.current;
@@ -362,7 +425,10 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
         return { ...prev, phase: "uploading", files, errorMessage: undefined, ...tally(files) };
       });
 
-      const queue = new UploadQueue(resolver, controller.signal, {
+      const queue = new UploadQueue(
+        resolver,
+        controller.signal,
+        {
         update: (id, patch) => patchFile(runId, id, patch),
         attributed: (a) => {
           if (runId === batchRunIdRef.current) setProgress((prev) => ({ ...prev, attributed: a }));
@@ -380,7 +446,9 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
           if (touched.size > 0) callbacksRef.current.onFilesUploaded([...touched]);
           setProgress((prev) => ({ ...prev, phase: "complete", activeFiles: [] }));
         },
-      });
+        },
+        config
+      );
 
       const items = ids
         .map((id) => batchFilesRef.current.get(id))
@@ -397,15 +465,18 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
 
   /** Upload everything under review that is not skipped. */
   const confirmBatch = useCallback(() => {
-    const ids = [...progress.files.values()].filter((f) => f.status !== "skipped").map((f) => f.id);
+    // Files already failed pre-flight (too large) are left as they are.
+    const ids = [...progress.files.values()]
+      .filter((f) => f.status !== "skipped" && f.status !== "error")
+      .map((f) => f.id);
     if (ids.length === 0) return;
-    runBatch(ids);
+    void runBatch(ids);
   }, [progress.files, runBatch]);
 
   const retryFailed = useCallback(() => {
     const ids = [...progress.files.values()].filter((f) => f.status === "error").map((f) => f.id);
     if (ids.length === 0) return;
-    runBatch(ids);
+    void runBatch(ids);
   }, [progress.files, runBatch]);
 
   /** Drop the current batch (aborting anything in flight) but leave the drawer as it is. */
@@ -449,8 +520,14 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
   );
 
   const beginWatching = useCallback(
-    (handle: FileSystemDirectoryHandle, dest: UploadDestination) => {
+    async (handle: FileSystemDirectoryHandle, dest: UploadDestination) => {
       stopWatch(false);
+      let config: UploadConfig;
+      try {
+        config = await loadConfig();
+      } catch {
+        config = { relayMaxBytes: 4 * 1024 * 1024, largeFiles: false, largeFileMaxBytes: 4 * 1024 * 1024 };
+      }
       const controller = new AbortController();
       watchAbortRef.current = controller;
       const key = ledgerKey(handle.name, dest);
@@ -461,7 +538,10 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
       const files = new Map<string, LocalFile>();
       const queued = new Set<string>();
 
-      const queue = new UploadQueue(resolver, controller.signal, {
+      const queue = new UploadQueue(
+        resolver,
+        controller.signal,
+        {
         update: (id, patch) =>
           updateWatch((w) => {
             const existing = w.files.get(id);
@@ -501,7 +581,9 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
           }
         },
         idle: () => {},
-      });
+        },
+        config
+      );
 
       watchRef.current = {
         handle,
@@ -600,7 +682,7 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
       const saved: SavedWatch = { handle, folderName: handle.name, destination: dest, savedAt: Date.now() };
       void saveWatch(saved);
       setSavedWatch(saved);
-      beginWatching(handle, dest);
+      await beginWatching(handle, dest);
       setPanelOpen(true);
       return true;
     },
@@ -613,7 +695,7 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
     if (!saved) return false;
     const ok = await ensureHandlePermission(saved.handle);
     if (!ok) return false;
-    beginWatching(saved.handle, saved.destination);
+    await beginWatching(saved.handle, saved.destination);
     return true;
   }, [savedWatch, beginWatching]);
 

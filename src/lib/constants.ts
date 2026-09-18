@@ -52,3 +52,11 @@ export const WATCH_STABLE_MS = 4000;
 export const WATCH_DONE_DIRNAME = "_Uploaded to Filevine";
 // Report written next to a batch's files (in-browser download) summarising an upload run.
 export const UPLOAD_REPORT_FILENAME = "_UPLOAD REPORT.txt";
+
+// Filevine's storage bucket allows no cross-origin requests, so file bytes
+// must pass through our server. Vercel caps a function's request body at
+// 4.5 MB: files up to this size are relayed in one request; larger files are
+// staged in Vercel Blob (browser → Blob directly, then server → Filevine).
+export const RELAY_MAX_BYTES = 4 * 1024 * 1024;
+// Largest single file the Blob path accepts.
+export const LARGE_FILE_MAX_BYTES = 5 * 1024 * 1024 * 1024;

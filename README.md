@@ -50,11 +50,23 @@ as a reviewed batch or by watching a local folder.
    (tick "Upload them anyway" to send copies); same name but different size
    is flagged and uploaded as a new document. Nothing is sent until you confirm.
 3. **Upload**: three files at a time with retries. Each file is a three-step
-   Filevine exchange — request an upload slot (`POST /Documents`), PUT the
-   bytes straight from the browser to Filevine's storage URL (they never pass
-   through Vercel), then commit (`POST /Projects/{id}/Documents/{docId}`).
-   Filevine records the signed-in person as the uploader when their email
-   matches a Filevine user; otherwise the shared API account.
+   Filevine exchange — request an upload slot (`POST /Documents`, which also
+   yields a pre-signed storage URL), send the bytes to that URL, then commit
+   (`POST /Projects/{id}/Documents/{docId}`). Filevine's storage bucket allows
+   no cross-origin requests, so the bytes cannot go straight from the browser;
+   they take one of two server paths, chosen by size:
+   - **≤ 4 MB** (`RELAY_MAX_BYTES`): the browser POSTs the file to
+     `/api/upload/put` with a signed *upload ticket* (the storage URL sealed
+     server-side, so the client never supplies it), and the server PUTs it on.
+     Vercel caps request bodies at 4.5 MB, hence the threshold.
+   - **> 4 MB**: the browser stages the file in **Vercel Blob** (client upload,
+     multipart, any size) via `/api/upload/blob-token`, then `/api/upload/relay`
+     streams Blob → Filevine and deletes the staged copy. This path needs a
+     Blob store connected to the project (`BLOB_READ_WRITE_TOKEN`); without
+     one, files over 4 MB are flagged on the review screen and not sent.
+   One pending Filevine document is created per file and reused across
+   retries. Filevine records the signed-in person as the uploader when their
+   email matches a Filevine user; otherwise the shared API account.
 4. Failed files are listed and **Retry failed files** sends only those.
 
 ### Watch a folder (Chromium)
@@ -90,7 +102,8 @@ variables in **Vercel → Project Settings → Environment Variables**.
 | `AUTH_MICROSOFT_ENTRA_ID_ISSUER` | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
 | `FILEVINE_PAT` | Filevine personal access token |
 | `FILEVINE_CLIENT_ID` / `FILEVINE_CLIENT_SECRET` | Filevine API client |
-| `SESSION_SECRET` | Signs the short-lived internal Filevine session JWT |
+| `SESSION_SECRET` | Signs the short-lived internal Filevine session JWT and upload tickets |
+| `BLOB_READ_WRITE_TOKEN` | Optional. Added automatically when a Vercel Blob store is connected; enables uploads over 4 MB |
 
 `AUTH_SECRET` must be set in production or sessions silently fail.
 
