@@ -2,7 +2,9 @@
 
 Internal Strong & Hanni tool. Browse a Filevine project's folders, select
 folders and/or individual documents, and download them as a ZIP — optionally
-converting documents (PDF, Word, text, CSV, …) to Markdown on the way.
+converting documents (PDF, Word, text, CSV, …) to Markdown on the way. Or go
+the other way: upload files from this computer into a Filevine folder, either
+as a reviewed batch or by watching a local folder.
 
 ## Download flow
 
@@ -36,6 +38,34 @@ converting documents (PDF, Word, text, CSV, …) to Markdown on the way.
    90 seconds before expiry, and the API routes answer an expired token with
    `401` (never `500`) so the client refreshes and retries instead of failing
    the file. Long runs are unaffected by the token lifetime.
+
+## Upload flow
+
+1. Open the Filevine folder you want files to land in (or stay at "All
+   Folders" for the project root) and click **Upload to …**, or drag files or
+   folders onto the folder browser.
+2. **Review**: the drawer lists every file grouped by destination. Dropped
+   folders keep their structure — missing Filevine subfolders are created.
+   Files already in the destination with the same name and size are skipped
+   (tick "Upload them anyway" to send copies); same name but different size
+   is flagged and uploaded as a new document. Nothing is sent until you confirm.
+3. **Upload**: three files at a time with retries. Each file is a three-step
+   Filevine exchange — request an upload slot (`POST /Documents`), PUT the
+   bytes straight from the browser to Filevine's storage URL (they never pass
+   through Vercel), then commit (`POST /Projects/{id}/Documents/{docId}`).
+   Filevine records the signed-in person as the uploader when their email
+   matches a Filevine user; otherwise the shared API account.
+4. Failed files are listed and **Retry failed files** sends only those.
+
+### Watch a folder (Chromium)
+
+From the upload review, **watch a folder on this computer**: pick a local
+folder once and, while the tab is open, anything placed in it is uploaded to
+the chosen Filevine folder as soon as it has stopped changing for a few
+seconds. Uploaded files are moved into `_Uploaded to Filevine` inside the
+watched folder; a ledger in the browser prevents re-sending even if that move
+fails. The watch is remembered and can be resumed with one click on the next
+visit. This is not a background service: close the tab and uploading pauses.
 
 Sign-in uses **Microsoft Entra ID** (the firm's M365 tenant) via Auth.js.
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useImperativeHandle } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -17,10 +17,13 @@ import {
   LayoutGrid,
   List as ListIcon,
   X,
+  Upload,
 } from "lucide-react";
 import { fetchDocumentsForFolder } from "@/lib/api";
+import { filesFromDrop } from "@/lib/localFiles";
 import type { DocumentItem, FolderNode } from "@/types/filevine";
 import type { DownloadSelection } from "@/types/download";
+import type { LocalFile, UploadDestination } from "@/types/upload";
 
 type CheckState = "checked" | "unchecked" | "indeterminate";
 type ViewMode = "list" | "grid";
@@ -28,7 +31,17 @@ type ViewMode = "list" | "grid";
 interface Props {
   tree: FolderNode[];
   projectId: number;
+  /** The project's root document folder, for uploads made from "All Folders". */
+  rootFolderId: number | null;
   onDownload: (selection: DownloadSelection) => void;
+  /** Open the upload drawer for a destination, with any files already dropped. */
+  onUpload: (destination: UploadDestination, files: LocalFile[]) => void;
+  ref?: React.Ref<DriveViewHandle>;
+}
+
+/** Imperative surface for the parent: refresh listings after uploads change them. */
+export interface DriveViewHandle {
+  invalidateFolders: (folderIds: number[]) => void;
 }
 
 /* ---------------------------------------------------------------- helpers */
@@ -64,7 +77,14 @@ function checkState(node: FolderNode, selected: Set<number>): CheckState {
 
 /* ---------------------------------------------------------------- view */
 
-export default function DriveView({ tree, projectId, onDownload }: Props) {
+export default function DriveView({
+  tree,
+  projectId,
+  rootFolderId,
+  onDownload,
+  onUpload,
+  ref,
+}: Props) {
   const { byId, parentById, allIds } = useMemo(() => {
     const byId = new Map<number, FolderNode>();
     const parentById = new Map<number, number | null>();
@@ -133,6 +153,23 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
     },
     [projectId]
   );
+
+  // Uploads changed a folder's contents: drop the cached listing and reload
+  // it if it is the one on screen.
+  const invalidateFolders = useCallback(
+    (folderIds: number[]) => {
+      const ids = new Set(folderIds);
+      for (const id of ids) requestedDocsRef.current.delete(id);
+      setDocsByFolder((prev) => {
+        const next = new Map(prev);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      if (currentFolderId != null && ids.has(currentFolderId)) loadDocs(currentFolderId);
+    },
+    [loadDocs, currentFolderId]
+  );
+  useImperativeHandle(ref, () => ({ invalidateFolders }), [invalidateFolders]);
 
   const childrenOf = useCallback(
     (id: number | null): FolderNode[] =>
@@ -310,6 +347,43 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
 
   const canDownload = allIds.size === 0 || selected.size > 0 || extraDocs.size > 0;
 
+  // Where an upload from this screen lands: the open folder, or the project root.
+  const uploadDest: UploadDestination | null =
+    currentFolderId != null
+      ? { projectId, folderId: currentFolderId, folderPath: crumbs.map((c) => c.name).join("/") }
+      : rootFolderId != null
+      ? { projectId, folderId: rootFolderId, folderPath: "" }
+      : null;
+  const uploadTargetName =
+    currentFolderId != null ? crumbs[crumbs.length - 1]?.name ?? "this folder" : "project root";
+
+  // Drag files anywhere over the folder area to upload into the open folder.
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!hasFiles(e) || !uploadDest) return;
+    e.preventDefault();
+    dragDepth.current++;
+    setDragging(true);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    if (!hasFiles(e) || !uploadDest) return;
+    e.preventDefault();
+  };
+  const onDragLeave = () => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  };
+  const onDrop = async (e: React.DragEvent) => {
+    if (!hasFiles(e) || !uploadDest) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = await filesFromDrop(e.dataTransfer);
+    if (files.length > 0) onUpload(uploadDest, files);
+  };
+
   // Documents of the folder currently open in the main area.
   const currentDocs =
     currentFolderId != null ? docsByFolder.get(currentFolderId) : undefined;
@@ -353,7 +427,24 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
       </aside>
 
       {/* Main */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div
+        className="relative flex min-w-0 flex-1 flex-col"
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {dragging && uploadDest && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-brand-tint/80 backdrop-blur-[1px]">
+            <div className="flex flex-col items-center gap-2 rounded-md border border-brand bg-surface px-8 py-6 text-center shadow-sm">
+              <Upload size={26} strokeWidth={1.5} className="text-brand" />
+              <p className="text-sm font-semibold text-ink">
+                Drop to upload into {currentFolderId != null ? uploadTargetName : "the project root"}
+              </p>
+              <p className="text-xs font-light text-muted">You will review the list before anything is sent.</p>
+            </div>
+          </div>
+        )}
         {/* Toolbar */}
         <div className="flex flex-col gap-3 border-b border-line bg-surface px-4 py-3 sm:px-6">
           <div className="flex items-center gap-2">
@@ -570,6 +661,19 @@ export default function DriveView({ tree, projectId, onDownload }: Props) {
               />
               Convert documents to Markdown
             </label>
+
+            <button
+              type="button"
+              onClick={() => uploadDest && onUpload(uploadDest, [])}
+              disabled={!uploadDest}
+              title={uploadDest ? `Upload files into ${uploadTargetName}` : "Open a folder to upload into it"}
+              className="flex items-center justify-center gap-2 rounded-sm border border-line bg-surface px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-ink transition-colors hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Upload size={17} />
+              <span className="truncate">
+                Upload to <span className="normal-case tracking-normal">{uploadTargetName}</span>
+              </span>
+            </button>
 
             <button
               type="button"

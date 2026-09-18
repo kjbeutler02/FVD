@@ -6,6 +6,7 @@ interface RawDocItem {
   documentId?: { native?: number };
   filename?: string;
   folderId?: { native?: number };
+  size?: number;
 }
 
 export async function GET(request: NextRequest) {
@@ -40,6 +41,7 @@ export async function GET(request: NextRequest) {
       documentId: doc.documentId?.native ?? 0,
       filename: doc.filename ?? "unknown",
       folderId: doc.folderId?.native ?? 0,
+      size: typeof doc.size === "number" ? doc.size : undefined,
     }));
 
     return NextResponse.json({

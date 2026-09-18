@@ -39,3 +39,16 @@ export const FOLDER_RESOLVE_BATCH = 25;
 export const FOLDER_RESOLVE_CONCURRENCY = 4;
 // Archive folder for documents whose Filevine folder could not be identified.
 export const UNKNOWN_FOLDER_PREFIX = "_Unknown folder";
+
+// Uploads: files sent to Filevine at once, attempts per file, and the
+// interval at which a watched local folder is rescanned for new files.
+export const UPLOAD_CONCURRENCY = 3;
+export const UPLOAD_MAX_RETRIES = 4;
+export const WATCH_SCAN_INTERVAL_MS = 5000;
+// A file whose size is still changing between two scans is being written by
+// another program; leave it until it has been stable for this long.
+export const WATCH_STABLE_MS = 4000;
+// Folder inside a watched folder where uploaded files are moved.
+export const WATCH_DONE_DIRNAME = "_Uploaded to Filevine";
+// Report written next to a batch's files (in-browser download) summarising an upload run.
+export const UPLOAD_REPORT_FILENAME = "_UPLOAD REPORT.txt";

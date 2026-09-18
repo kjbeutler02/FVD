@@ -9,6 +9,8 @@ export interface DocumentItem {
   documentId: number;
   filename: string;
   folderId: number;
+  /** File size in bytes, when Filevine reports it. */
+  size?: number;
 }
 
 export interface DocumentPage {

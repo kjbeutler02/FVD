@@ -116,9 +116,16 @@ export async function getOrgAndUserIds(
 const THROTTLE_RETRIES = 4;
 const THROTTLE_BASE_DELAY_MS = 1500;
 
-async function fetchWithBackoff(url: string, headers: Record<string, string>): Promise<Response> {
+async function fetchWithBackoff(
+  url: string,
+  headers: Record<string, string>,
+  init: RequestInit = {}
+): Promise<Response> {
   for (let attempt = 1; ; attempt++) {
-    const res = await fetch(url, { headers });
+    const res = await fetch(url, {
+      ...init,
+      headers: init.body ? { ...headers, "Content-Type": "application/json" } : headers,
+    });
     if (res.status !== 429 || attempt > THROTTLE_RETRIES) return res;
     const retryAfter = Number(res.headers.get("Retry-After"));
     const delay =
@@ -262,4 +269,149 @@ export async function fetchLocator(
     throw new FilevineError(`Filevine did not provide a download link for doc ${docId}`, 404);
   }
   return data;
+}
+
+/* ------------------------------------------------------------- uploads */
+
+export interface UploadSlot {
+  documentId: number;
+  /** Pre-signed storage URL; PUT the file bytes here. Expires in 5 hours. */
+  url: string;
+  /** MIME type Filevine expects on the PUT, when it specifies one. */
+  contentType: string | null;
+}
+
+interface RawIdentifier {
+  native?: number;
+  Native?: number;
+}
+
+function nativeId(v: RawIdentifier | undefined | null): number | undefined {
+  return v?.native ?? v?.Native;
+}
+
+/**
+ * Step 1 of an upload: register a pending document and get a pre-signed URL
+ * to PUT the bytes to. The document stays pending (invisible in Filevine)
+ * until `commitDocument` is called.
+ */
+export async function createUploadSlot(
+  params: {
+    projectId: number;
+    folderId: number;
+    filename: string;
+    size: number;
+    uploaderId?: number;
+  },
+  headers: Record<string, string>
+): Promise<UploadSlot> {
+  const body: Record<string, unknown> = {
+    Filename: params.filename,
+    Size: params.size,
+    ProjectId: { Native: params.projectId },
+    FolderId: { Native: params.folderId },
+  };
+  if (params.uploaderId) body.UploaderId = { Native: params.uploaderId };
+
+  const res = await fetchWithBackoff(`${API_ROOT}/Documents`, headers, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new FilevineError(
+      `Filevine refused the upload of "${params.filename}": ${res.status}${await errorDetail(res)}`,
+      res.status
+    );
+  }
+  const data = await res.json();
+  const documentId = nativeId(data.documentId ?? data.DocumentId);
+  const url = data.url ?? data.Url;
+  if (documentId == null || typeof url !== "string" || url === "") {
+    throw new FilevineError("Filevine did not return an upload URL", 502);
+  }
+  return { documentId, url, contentType: data.contentType ?? data.ContentType ?? null };
+}
+
+/**
+ * Step 3 of an upload: commit the pending document to the project and folder
+ * so it appears in Filevine. Returns the committed document's id.
+ */
+export async function commitDocument(
+  params: { projectId: number; documentId: number; folderId: number },
+  headers: Record<string, string>
+): Promise<{ documentId: number; filename: string }> {
+  const url = `${API_ROOT}/Projects/${params.projectId}/Documents/${params.documentId}?folderId=${params.folderId}`;
+  const res = await fetchWithBackoff(url, headers, { method: "POST" });
+  if (!res.ok) {
+    throw new FilevineError(
+      `Filevine could not file the uploaded document: ${res.status}${await errorDetail(res)}`,
+      res.status
+    );
+  }
+  const data = await res.json();
+  return {
+    documentId: nativeId(data.documentId ?? data.DocumentId) ?? params.documentId,
+    filename: data.filename ?? data.Filename ?? "",
+  };
+}
+
+/** Create a folder under `parentId` in a project. Returns the new folder's id. */
+export async function createFolder(
+  params: { projectId: number; parentId: number; name: string },
+  headers: Record<string, string>
+): Promise<number> {
+  const body = {
+    Name: params.name,
+    ProjectId: { Native: params.projectId },
+    ParentId: { Native: params.parentId },
+  };
+  const res = await fetchWithBackoff(`${API_ROOT}/Folders`, headers, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new FilevineError(
+      `Filevine could not create folder "${params.name}": ${res.status}${await errorDetail(res)}`,
+      res.status
+    );
+  }
+  const data = await res.json();
+  const id = nativeId(data.folderId ?? data.FolderId);
+  if (id == null) throw new FilevineError("Filevine did not return the new folder's id", 502);
+  return id;
+}
+
+/** Filevine's user record for an email address, if one exists in the org. */
+export async function findUserIdByEmail(
+  email: string,
+  headers: Record<string, string>
+): Promise<number | null> {
+  // The Users list accepts an email filter; items are org-user records that
+  // wrap the user (and its userId) one level down.
+  const res = await fetchWithBackoff(
+    `${API_ROOT}/Users?limit=5&email=${encodeURIComponent(email)}`,
+    headers
+  );
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => ({}));
+  const items: { email?: string; user?: { email?: string; userId?: RawIdentifier } }[] =
+    data.items ?? [];
+  const wanted = email.toLowerCase();
+  const match = items.find(
+    (u) => (u.email ?? u.user?.email ?? "").toLowerCase() === wanted
+  );
+  return match ? (nativeId(match.user?.userId) ?? null) : null;
+}
+
+/** Short, safe excerpt of an upstream error body for the message a user sees. */
+async function errorDetail(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "");
+  if (!text) return "";
+  try {
+    const json = JSON.parse(text);
+    const msg = json.message ?? json.detail ?? json.title;
+    return typeof msg === "string" && msg ? ` — ${msg.slice(0, 200)}` : "";
+  } catch {
+    return "";
+  }
 }

@@ -66,7 +66,7 @@ export async function withRetry<T>(
   }
 }
 
-async function errorFromResponse(res: Response, fallback: string): Promise<HttpError> {
+export async function errorFromResponse(res: Response, fallback: string): Promise<HttpError> {
   const data = await res.json().catch(() => ({}));
   const detail = typeof data.error === "string" && data.error ? data.error : fallback;
   return new HttpError(detail, res.status);
@@ -133,7 +133,7 @@ async function authHeaders(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${sessionToken}` };
 }
 
-async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
+export async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
   const tokenBefore = sessionToken;
   const headers = await authHeaders();
   const res = await fetch(url, {
@@ -160,6 +160,8 @@ async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response>
 export interface FolderResponse {
   tree: FolderNode[];
   flatMap: Record<number, { name: string; parentId: number | null }>;
+  /** The project's root document folder (parent of the top-level folders), if it could be determined. */
+  rootFolderId: number | null;
   totalCount: number;
 }
 
