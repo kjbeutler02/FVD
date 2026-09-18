@@ -68,6 +68,8 @@ export interface UploadProgress {
   uploadDuplicates: boolean;
   /** Whether the duplicate check against Filevine is still running. */
   checkingDuplicates: boolean;
+  /** Bumped each time a check is requested; a finished check applies only if it still matches. */
+  checkToken: number;
   /** Whether Filevine attributed the uploads to the signed-in user (vs. the shared credential). */
   attributed: boolean | null;
   errorMessage?: string;

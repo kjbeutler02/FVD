@@ -39,6 +39,7 @@ function initialProgress(): UploadProgress {
     foldersToCreate: [],
     uploadDuplicates: false,
     checkingDuplicates: false,
+    checkToken: 0,
     attributed: null,
   };
 }
@@ -108,7 +109,6 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
   const batchFilesRef = useRef<Map<string, LocalFile>>(new Map());
   const batchAbortRef = useRef<AbortController | null>(null);
   const batchRunIdRef = useRef(0);
-  const dupCheckRef = useRef(0);
 
   // Watch run
   const watchAbortRef = useRef<AbortController | null>(null);
@@ -180,6 +180,9 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
    */
   const checkDuplicates = useCallback(
     async (dest: UploadDestination, files: LocalFile[], resolver: FolderResolver, checkId: number) => {
+      // Always yield once so the state update below never runs synchronously
+      // inside the effect that started us.
+      await Promise.resolve();
       const byFolder = new Map<number, LocalFile[]>();
       for (const lf of files) {
         const fid = resolver.lookup(dest.folderId, lf.relDir);
@@ -205,11 +208,10 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
         } catch {
           /* listing failed: treat as no duplicates rather than block the upload */
         }
-        if (checkId !== dupCheckRef.current) return;
       }
-      if (checkId !== dupCheckRef.current) return;
       setProgress((prev) => {
-        if (prev.phase !== "review") return prev;
+        // A newer batch or a later "add files" superseded this check.
+        if (prev.phase !== "review" || prev.checkToken !== checkId) return prev;
         const next = new Map(prev.files);
         for (const [id, f] of next) {
           const dup = marks.get(id);
@@ -238,7 +240,7 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
       ].sort();
       const map = new Map(files.map((f) => [f.id, toProgress(f, dest)]));
       setPanelOpen(true);
-      setProgress({
+      setProgress((prev) => ({
         ...initialProgress(),
         phase: "review",
         destination: dest,
@@ -246,54 +248,70 @@ export function useUploadOrchestrator({ folderFlatMap, onFoldersCreated, onFiles
         totalFiles: files.length,
         totalBytes: files.reduce((n, f) => n + f.size, 0),
         foldersToCreate,
+        // The duplicate check runs from an effect keyed on this token.
         checkingDuplicates: files.length > 0,
+        checkToken: prev.checkToken + 1,
         ...tally(map),
-      });
-      if (files.length > 0) {
-        const checkId = ++dupCheckRef.current;
-        void checkDuplicates(dest, files, resolver, checkId);
-      }
+      }));
     },
-    [checkDuplicates]
+    []
   );
 
+  // Run the duplicate check whenever a review batch asks for one. Kicking it
+  // off here (not inside a state updater) keeps updaters pure, so React can
+  // re-run them freely without losing the "check finished" update.
+  const lastCheckRef = useRef(0);
+  useEffect(() => {
+    if (progress.phase !== "review" || !progress.checkingDuplicates || !progress.destination) return;
+    if (progress.checkToken === lastCheckRef.current) return;
+    lastCheckRef.current = progress.checkToken;
+    const dest = progress.destination;
+    const token = progress.checkToken;
+    const files = [...batchFilesRef.current.values()];
+    const resolver = new FolderResolver(dest.projectId, flatMapRef.current);
+    // Deferred so the check (and its eventual state update) runs after this
+    // effect, never synchronously inside it.
+    queueMicrotask(() => void checkDuplicates(dest, files, resolver, token));
+  }, [progress.phase, progress.checkingDuplicates, progress.checkToken, progress.destination, checkDuplicates]);
+
   /** Add more files to a batch still under review. */
-  const addFiles = useCallback(
-    (files: LocalFile[]) => {
-      setProgress((prev) => {
-        if (prev.phase !== "review" || !prev.destination || files.length === 0) return prev;
-        const dest = prev.destination;
-        const existingKeys = new Set(
-          [...batchFilesRef.current.values()].map((f) => fileKey(f.relDir, f.name, f.size, f.lastModified))
-        );
-        const fresh = files.filter((f) => !existingKeys.has(fileKey(f.relDir, f.name, f.size, f.lastModified)));
-        for (const f of fresh) batchFilesRef.current.set(f.id, f);
-        const all = [...batchFilesRef.current.values()];
-        const resolver = new FolderResolver(dest.projectId, flatMapRef.current);
-        const foldersToCreate = [
-          ...new Set(
-            all
-              .filter((f) => f.relDir.length > 0 && !resolver.exists(dest.folderId, f.relDir))
-              .map((f) => targetPath(dest, f.relDir))
-          ),
-        ].sort();
-        const map = new Map(prev.files);
-        for (const f of fresh) map.set(f.id, toProgress(f, dest));
-        const checkId = ++dupCheckRef.current;
-        void checkDuplicates(dest, all, resolver, checkId);
-        return {
-          ...prev,
-          files: map,
-          totalFiles: all.length,
-          totalBytes: all.reduce((n, f) => n + f.size, 0),
-          foldersToCreate,
-          checkingDuplicates: true,
-          ...tally(map),
-        };
-      });
-    },
-    [checkDuplicates]
-  );
+  const addFiles = useCallback((files: LocalFile[]) => {
+    // Everything that mutates lives outside the updater: React may run an
+    // updater more than once, and a second pass must see the same inputs.
+    const existingKeys = new Set(
+      [...batchFilesRef.current.values()].map((f) => fileKey(f.relDir, f.name, f.size, f.lastModified))
+    );
+    const fresh = files.filter((f) => !existingKeys.has(fileKey(f.relDir, f.name, f.size, f.lastModified)));
+    if (fresh.length === 0) return;
+    for (const f of fresh) batchFilesRef.current.set(f.id, f);
+    const all = [...batchFilesRef.current.values()];
+    const flatMap = flatMapRef.current;
+
+    setProgress((prev) => {
+      if (prev.phase !== "review" || !prev.destination) return prev;
+      const dest = prev.destination;
+      const resolver = new FolderResolver(dest.projectId, flatMap);
+      const foldersToCreate = [
+        ...new Set(
+          all
+            .filter((f) => f.relDir.length > 0 && !resolver.exists(dest.folderId, f.relDir))
+            .map((f) => targetPath(dest, f.relDir))
+        ),
+      ].sort();
+      const map = new Map(prev.files);
+      for (const f of fresh) map.set(f.id, toProgress(f, dest));
+      return {
+        ...prev,
+        files: map,
+        totalFiles: all.length,
+        totalBytes: all.reduce((n, f) => n + f.size, 0),
+        foldersToCreate,
+        checkingDuplicates: true,
+        checkToken: prev.checkToken + 1,
+        ...tally(map),
+      };
+    });
+  }, []);
 
   const removeFile = useCallback((id: string) => {
     batchFilesRef.current.delete(id);
