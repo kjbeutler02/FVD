@@ -17,12 +17,14 @@ export async function GET(request: NextRequest) {
   try {
     const session = await verifySessionToken(token);
     const headers = getFilevineHeaders(session);
-    const rawItems = await fetchFolderTree(Number(projectId), headers);
-    const tree = buildFolderTree(rawItems as RawFolderItem[]);
+    const rawItems: RawFolderItem[] = await fetchFolderTree(Number(projectId), headers);
+    // The browsable tree hides archived folders; the path map keeps them so
+    // documents inside archived folders still land in the right place.
+    const tree = buildFolderTree(rawItems.filter((item) => !item.isArchived));
 
     // Also return a flat map for building folder paths on the client
     const flatMap: Record<number, { name: string; parentId: number | null }> = {};
-    for (const item of rawItems as RawFolderItem[]) {
+    for (const item of rawItems) {
       const id = item.folderId?.native;
       if (id != null) {
         flatMap[id] = {

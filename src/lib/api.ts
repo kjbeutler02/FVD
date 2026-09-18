@@ -1,5 +1,10 @@
 import type { FolderNode, DocumentItem, DocumentPage, LocatorResult } from "@/types/filevine";
-import { FOLDER_SCAN_CONCURRENCY, SCAN_RETRIES, SESSION_REFRESH_MARGIN_SECONDS } from "@/lib/constants";
+import {
+  FOLDER_RESOLVE_BATCH,
+  FOLDER_SCAN_CONCURRENCY,
+  SCAN_RETRIES,
+  SESSION_REFRESH_MARGIN_SECONDS,
+} from "@/lib/constants";
 
 export { displayFolderPath as buildFolderPath } from "@/lib/zipPath";
 
@@ -159,9 +164,97 @@ export interface FolderResponse {
 }
 
 export async function fetchFolders(projectId: number): Promise<FolderResponse> {
-  const res = await fetchWithAuth(`/api/folders?projectId=${projectId}`);
-  if (!res.ok) throw await errorFromResponse(res, "Failed to fetch folders");
-  return res.json();
+  return withRetry(async () => {
+    const res = await fetchWithAuth(`/api/folders?projectId=${projectId}`);
+    if (!res.ok) throw await errorFromResponse(res, "Failed to fetch folders");
+    return res.json() as Promise<FolderResponse>;
+  }, SCAN_RETRIES);
+}
+
+export type FolderFlatMap = FolderResponse["flatMap"];
+
+export interface ResolveFoldersResponse {
+  folders: FolderFlatMap;
+  missing: number[];
+}
+
+/** Look up folders the project's folder list did not include (max FOLDER_RESOLVE_BATCH ids). */
+export async function resolveFolders(
+  folderIds: number[],
+  signal?: AbortSignal
+): Promise<ResolveFoldersResponse> {
+  return withRetry(
+    async () => {
+      const res = await fetchWithAuth("/api/folders/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderIds }),
+        signal,
+      });
+      if (!res.ok) throw await errorFromResponse(res, "Failed to resolve folders");
+      return res.json() as Promise<ResolveFoldersResponse>;
+    },
+    SCAN_RETRIES,
+    signal
+  );
+}
+
+/**
+ * Fill in `flatMap` for every folder referenced by `docs` that it does not
+ * already contain, following parent chains until each path reaches a known
+ * folder or the project root. Returns the number of documents whose folder
+ * could still not be identified. Best effort: a failed lookup leaves those
+ * documents unresolved rather than failing the run.
+ */
+export async function resolveMissingFolders(
+  docs: { folderId: number }[],
+  flatMap: FolderFlatMap,
+  signal?: AbortSignal,
+  onProgress?: (done: number, total: number) => void
+): Promise<number> {
+  const pending = new Set<number>();
+  for (const d of docs) {
+    if (d.folderId && !flatMap[d.folderId]) pending.add(d.folderId);
+  }
+  const missing = new Set<number>();
+  let done = 0;
+  let total = pending.size;
+
+  while (pending.size > 0) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const batch = [...pending].slice(0, FOLDER_RESOLVE_BATCH);
+    for (const id of batch) pending.delete(id);
+
+    let result: ResolveFoldersResponse;
+    try {
+      result = await resolveFolders(batch, signal);
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      for (const id of batch) missing.add(id);
+      done += batch.length;
+      onProgress?.(done, total);
+      continue;
+    }
+
+    for (const [id, folder] of Object.entries(result.folders)) {
+      flatMap[Number(id)] = folder;
+      // Walk up: the parent may itself be a folder the list did not cover.
+      const parentId = folder.parentId;
+      if (parentId != null && !flatMap[parentId] && !missing.has(parentId) && !pending.has(parentId)) {
+        pending.add(parentId);
+        total++;
+      }
+    }
+    for (const id of result.missing) missing.add(id);
+    done += batch.length;
+    onProgress?.(done, total);
+  }
+
+  let unresolved = 0;
+  for (const d of docs) {
+    if (d.folderId && !flatMap[d.folderId]) unresolved++;
+  }
+  return unresolved;
 }
 
 /* ----------------------------------------------------------- documents */

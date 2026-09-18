@@ -93,6 +93,10 @@ export interface DownloadProgress {
   canResume: boolean;
   /** Whether a failure report was written into an archive. */
   reportIncluded: boolean;
+  /** Folder lookups in progress for documents the folder list did not cover. */
+  resolvingFolders?: { done: number; total: number };
+  /** Documents whose Filevine folder could not be identified (saved under "_Unknown folder <id>"). */
+  unknownFolderDocs: number;
   scanProgress?: number; // documents matching the selection so far during scanning
   scanTotal?: number; // total documents inspected so far (project-wide scan)
   scanFoldersDone?: number; // folders searched so far (folder-scoped scan)

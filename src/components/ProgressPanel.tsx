@@ -18,7 +18,12 @@ import {
   FolderDown,
   Play,
 } from "lucide-react";
-import { PART_MAX_FILES, REPORT_FILENAME, RUN_REPORT_FILENAME } from "@/lib/constants";
+import {
+  PART_MAX_FILES,
+  REPORT_FILENAME,
+  RUN_REPORT_FILENAME,
+  UNKNOWN_FOLDER_PREFIX,
+} from "@/lib/constants";
 import type {
   DownloadPhase,
   DownloadProgress,
@@ -91,6 +96,8 @@ export default function ProgressPanel({
     canResume,
     reportIncluded,
     errorMessage,
+    resolvingFolders,
+    unknownFolderDocs,
     scanProgress,
     scanTotal,
     scanFoldersDone,
@@ -249,6 +256,13 @@ export default function ProgressPanel({
                   </p>
                 )
               )}
+              {resolvingFolders && (
+                <p className="pl-6 text-xs font-light text-muted">
+                  Looking up {plural(resolvingFolders.total, "folder")} not in the project&apos;s
+                  folder list… {Math.min(resolvingFolders.done, resolvingFolders.total)} of{" "}
+                  {resolvingFolders.total}
+                </p>
+              )}
               <p className="pl-6 text-xs font-light text-muted">
                 Nothing is downloaded yet — you will review the list first.
               </p>
@@ -258,6 +272,7 @@ export default function ProgressPanel({
               totalFiles={totalFiles}
               folderCount={groups.length}
               partCount={parts.length}
+              unknownFolderDocs={unknownFolderDocs}
               excludedCount={excludedCount}
               convertToMd={convertToMd}
               convertibleTotal={convertibleTotal}
@@ -586,6 +601,7 @@ function ReviewSummary({
   totalFiles,
   folderCount,
   partCount,
+  unknownFolderDocs,
   excludedCount,
   convertToMd,
   convertibleTotal,
@@ -593,6 +609,7 @@ function ReviewSummary({
   totalFiles: number;
   folderCount: number;
   partCount: number;
+  unknownFolderDocs: number;
   excludedCount: number;
   convertToMd: boolean;
   convertibleTotal: number;
@@ -636,6 +653,20 @@ function ReviewSummary({
           <li>
             {plural(excludedCount, "document")} you deselected{" "}
             {excludedCount === 1 ? "is" : "are"} not included.
+          </li>
+        )}
+        {unknownFolderDocs > 0 && (
+          <li className="text-error">
+            <span className="font-medium">
+              {plural(unknownFolderDocs, "document")} {unknownFolderDocs === 1 ? "is" : "are"} in
+              folders Filevine could not identify.
+            </span>{" "}
+            {unknownFolderDocs === 1 ? "It" : "They"} will be saved under{" "}
+            <code className="rounded-sm bg-canvas px-1 font-mono text-[0.7rem]">
+              {UNKNOWN_FOLDER_PREFIX} &lt;id&gt;
+            </code>{" "}
+            at the top of the archive so {unknownFolderDocs === 1 ? "it stays" : "they stay"}{" "}
+            traceable.
           </li>
         )}
       </ul>
