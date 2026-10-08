@@ -75,6 +75,22 @@ function checkState(node: FolderNode, selected: Set<number>): CheckState {
   return "indeterminate";
 }
 
+/** Drop override entries for documents living in any of the given folders. */
+function pruneOverrides(
+  prev: Map<number, DocumentItem>,
+  folderIds: Set<number>
+): Map<number, DocumentItem> {
+  let changed = false;
+  const next = new Map(prev);
+  for (const [id, doc] of prev) {
+    if (folderIds.has(doc.folderId)) {
+      next.delete(id);
+      changed = true;
+    }
+  }
+  return changed ? next : prev;
+}
+
 /* ---------------------------------------------------------------- view */
 
 export default function DriveView({
@@ -221,22 +237,6 @@ export default function DriveView({
     });
   }, []);
 
-  /** Drop override entries for documents living in any of the given folders. */
-  const pruneOverrides = (
-    prev: Map<number, DocumentItem>,
-    folderIds: Set<number>
-  ): Map<number, DocumentItem> => {
-    let changed = false;
-    const next = new Map(prev);
-    for (const [id, doc] of prev) {
-      if (folderIds.has(doc.folderId)) {
-        next.delete(id);
-        changed = true;
-      }
-    }
-    return changed ? next : prev;
-  };
-
   /** Folder check state including per-document overrides in its subtree. */
   const nodeState = useCallback(
     (node: FolderNode): CheckState => {
@@ -259,25 +259,48 @@ export default function DriveView({
     [selected, extraDocs, excludedDocs]
   );
 
+  /** Select or clear whole subtrees, documents included. */
+  const setSubtrees = useCallback((nodes: FolderNode[], on: boolean) => {
+    const ids = new Set<number>();
+    for (const node of nodes) for (const id of getDescendantIds(node)) ids.add(id);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+    // The folder-level action wins over any per-document overrides beneath it.
+    setExtraDocs((prev) => pruneOverrides(prev, ids));
+    setExcludedDocs((prev) => pruneOverrides(prev, ids));
+  }, []);
+
   const toggleSelect = useCallback(
-    (node: FolderNode) => {
-      const descendants = getDescendantIds(node);
-      const state = nodeState(node);
-      setSelected((prev) => {
-        const next = new Set(prev);
-        if (state === "checked") {
-          for (const id of descendants) next.delete(id);
-        } else {
-          for (const id of descendants) next.add(id);
-        }
-        return next;
-      });
-      // The folder-level action wins over any per-document overrides beneath it.
-      setExtraDocs((prev) => pruneOverrides(prev, descendants));
-      setExcludedDocs((prev) => pruneOverrides(prev, descendants));
-    },
-    [nodeState]
+    (node: FolderNode) => setSubtrees([node], nodeState(node) !== "checked"),
+    [nodeState, setSubtrees]
   );
+
+  // "Select all" for what is on screen: the open folder's whole contents, or
+  // every filter match. At the top level that is every top-level folder.
+  const viewNodes = useMemo(() => {
+    if (searching || currentFolderId == null) return items;
+    const node = byId.get(currentFolderId);
+    return node ? [node] : [];
+  }, [searching, currentFolderId, items, byId]);
+
+  const viewState = useMemo((): CheckState => {
+    let checked = 0;
+    for (const node of viewNodes) {
+      const s = nodeState(node);
+      if (s === "indeterminate") return "indeterminate";
+      if (s === "checked") checked++;
+    }
+    if (checked === 0) return "unchecked";
+    return checked === viewNodes.length ? "checked" : "indeterminate";
+  }, [viewNodes, nodeState]);
+
+  const toggleView = () => setSubtrees(viewNodes, viewState !== "checked");
 
   const isDocChecked = useCallback(
     (doc: DocumentItem): boolean =>
@@ -468,17 +491,32 @@ export default function DriveView({
           </div>
 
           <div className="flex items-center justify-between gap-3">
-            <p className="truncate text-xs font-light text-muted">
-              {searching
-                ? `${items.length} ${items.length === 1 ? "match" : "matches"}`
-                : `${items.length} ${items.length === 1 ? "folder" : "folders"}${
-                    currentFolderId != null && currentDocs
-                      ? ` · ${currentDocs.length} ${
-                          currentDocs.length === 1 ? "document" : "documents"
-                        }`
-                      : ""
-                  }`}
-            </p>
+            <div className="flex min-w-0 items-center gap-3 pl-[13px] sm:pl-[17px]">
+              {viewNodes.length > 0 && (
+                <Checkbox
+                  state={viewState}
+                  onToggle={toggleView}
+                  label={
+                    searching
+                      ? "Select all matching folders"
+                      : currentFolderId != null
+                      ? "Select everything in this folder"
+                      : "Select all folders"
+                  }
+                />
+              )}
+              <p className="truncate text-xs font-light text-muted">
+                {searching
+                  ? `${items.length} ${items.length === 1 ? "match" : "matches"}`
+                  : `${items.length} ${items.length === 1 ? "folder" : "folders"}${
+                      currentFolderId != null && currentDocs
+                        ? ` · ${currentDocs.length} ${
+                            currentDocs.length === 1 ? "document" : "documents"
+                          }`
+                        : ""
+                    }`}
+              </p>
+            </div>
 
             <div className="flex items-center gap-2">
               <div className="relative">
@@ -697,16 +735,20 @@ function Checkbox({
   state,
   onToggle,
   className = "",
+  label,
 }: {
   state: CheckState;
   onToggle: () => void;
   className?: string;
+  label?: string;
 }) {
   const active = state !== "unchecked";
   return (
     <button
       type="button"
       role="checkbox"
+      aria-label={label}
+      title={label}
       aria-checked={state === "indeterminate" ? "mixed" : state === "checked"}
       onClick={(e) => {
         e.stopPropagation();
