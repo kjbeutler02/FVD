@@ -8,13 +8,10 @@ import {
   fetchAllDocuments,
   fetchDocumentsByFolders,
   resolveMissingFolders,
-  isRetryable,
-  retryDelay,
 } from "@/lib/api";
 import { archivePath, displayFolderPath, folderPathParts } from "@/lib/zipPath";
 import {
   DOWNLOAD_CONCURRENCY,
-  MAX_RETRIES,
   FOLDER_SCOPED_MAX,
   PART_MAX_FILES,
   REPORT_FILENAME,
@@ -82,6 +79,8 @@ interface ResumeState {
   files: Map<number, FileProgress>;
   partProgress: PartProgress[];
   partReports: PartReport[];
+  /** Archive paths taken by the parts already on disk. */
+  usedPaths: Set<string>;
 }
 
 function initialProgress(): DownloadProgress {
@@ -420,6 +419,14 @@ export function useDownloadOrchestrator() {
       }
       const partProgress = buildPartProgress(parts, run.zipName, startPart - 1);
       const partReports: PartReport[] = resume ? resume.partReports.slice(0, startPart - 1) : [];
+      // Paths are unique across the whole run, not just within one ZIP: the
+      // parts are meant to be extracted into the same place, and two files
+      // with the same name in the same Filevine folder can fall either side
+      // of a part boundary. Holds the paths of the parts finished so far.
+      let usedPaths = new Set(resume?.usedPaths);
+      // The folder-level summary of a split run keeps its name to itself, so
+      // extracting the parts beside it never replaces it with a part's report.
+      if (!resume && partCount > 1) archivePath([], RUN_REPORT_FILENAME, usedPaths);
       const saveFolder = target.mode === "directory" ? target.handle.name : undefined;
 
       commit(runId, () => ({
@@ -459,8 +466,19 @@ export function useDownloadOrchestrator() {
         setPart(p, "writing");
 
         const report: PartReport = { failures: [], keptOriginal: [] };
-        const entries = zipEntries(partDocs, p, zipName, run, updateFile, controller.signal, report, () =>
-          commit(runId, (prev) => ({ ...prev, reportIncluded: true }))
+        // This part adds to a copy, so a part that fails and is redone does
+        // not find its own earlier paths taken.
+        const partPaths = new Set(usedPaths);
+        const entries = zipEntries(
+          partDocs,
+          p,
+          zipName,
+          run,
+          partPaths,
+          updateFile,
+          controller.signal,
+          report,
+          () => commit(runId, (prev) => ({ ...prev, reportIncluded: true }))
         );
 
         try {
@@ -471,6 +489,7 @@ export function useDownloadOrchestrator() {
             commit(runId, (prev) => ({ ...prev, phase: "downloading" }));
           }
           partReports.push(report);
+          usedPaths = partPaths;
           setPart(p, "complete");
         } catch (err) {
           if (controller.signal.aborted || isAbort(err)) {
@@ -490,6 +509,7 @@ export function useDownloadOrchestrator() {
                 files: new Map(fileState),
                 partProgress: [...partProgress],
                 partReports: [...partReports],
+                usedPaths,
               }
             : null;
           commit(runId, (prev) => ({
@@ -691,12 +711,12 @@ async function* zipEntries(
   part: number,
   zipName: string,
   run: PendingRun,
+  usedPaths: Set<string>,
   updateFile: (docId: number, update: Partial<FileProgress>) => void,
   signal: AbortSignal,
   report: PartReport,
   onReportIncluded: () => void
 ): AsyncGenerator<ZipEntry> {
-  const usedPaths = new Set<string>();
   const inFlight: Promise<FileResult>[] = [];
   let next = 0;
 
@@ -741,45 +761,41 @@ async function downloadSingleFile(
     part,
   };
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      let blob = await downloadFileViaProxy(doc.documentId, signal);
-      let filename = doc.filename;
-      let outcome: FileOutcome | undefined;
+  try {
+    // Retries, resuming and the completeness check all live in the transfer.
+    let blob = await downloadFileViaProxy(doc.documentId, signal);
+    let filename = doc.filename;
+    let outcome: FileOutcome | undefined;
 
-      // Replace convertible documents (PDF, Word, text, CSV, …) with their
-      // extracted Markdown. Files with no usable text (scanned PDFs, corrupt
-      // or encrypted documents) keep the original file instead.
-      if (run.convertToMd && base.convertible) {
-        const markdown = await convertToMarkdown(blob, doc.filename);
-        if (markdown != null) {
-          blob = new Blob([markdown], { type: "text/markdown" });
-          filename = markdownFilename(doc.filename);
-          outcome = "converted";
-        } else {
-          outcome = "kept-original";
-        }
+    // Replace convertible documents (PDF, Word, text, CSV, …) with their
+    // extracted Markdown. Files with no usable text (scanned PDFs, corrupt
+    // or encrypted documents) keep the original file instead.
+    if (run.convertToMd && base.convertible) {
+      const markdown = await convertToMarkdown(blob, doc.filename);
+      if (markdown != null) {
+        blob = new Blob([markdown], { type: "text/markdown" });
+        filename = markdownFilename(doc.filename);
+        outcome = "converted";
+      } else {
+        outcome = "kept-original";
       }
-
-      const zipPath = archivePath(folderParts, filename, usedPaths);
-      const done: FileProgress = { ...base, status: "complete", zipPath, outcome };
-      updateFile(doc.documentId, { status: "complete", zipPath, outcome });
-      return { entry: { name: zipPath, input: blob }, progress: done };
-    } catch (err) {
-      // On cancel, stop quietly — don't retry or flag the file as failed.
-      if (signal.aborted) return { entry: null, progress: null };
-      if (attempt < MAX_RETRIES && isRetryable(err)) {
-        await new Promise((r) => setTimeout(r, retryDelay(err, attempt)));
-        continue;
-      }
-      const message = err instanceof Error ? err.message : "Download failed";
-      const failed: FileProgress = { ...base, status: "error", error: message };
-      updateFile(doc.documentId, { status: "error", error: message });
-      return { entry: null, progress: failed };
     }
-  }
 
-  return { entry: null, progress: null };
+    // On cancel, stop quietly — the archive is being discarded.
+    if (signal.aborted) return { entry: null, progress: null };
+
+    const zipPath = archivePath(folderParts, filename, usedPaths);
+    const done: FileProgress = { ...base, status: "complete", zipPath, outcome };
+    updateFile(doc.documentId, { status: "complete", zipPath, outcome });
+    return { entry: { name: zipPath, input: blob }, progress: done };
+  } catch (err) {
+    // On cancel, stop quietly — don't flag the file as failed.
+    if (signal.aborted) return { entry: null, progress: null };
+    const message = err instanceof Error ? err.message : "Download failed";
+    const failed: FileProgress = { ...base, status: "error", error: message };
+    updateFile(doc.documentId, { status: "error", error: message });
+    return { entry: null, progress: failed };
+  }
 }
 
 /* ------------------------------------------------------------- reports */
@@ -808,7 +824,7 @@ function buildPartReport(
     lines.push(
       "",
       `NOT DOWNLOADED (${failures.length})`,
-      `These files could not be retrieved after ${MAX_RETRIES} attempts and are missing from the archive.`,
+      `These files could not be retrieved after repeated attempts and are missing from the archive.`,
       `Use "Retry failed files" in the downloader to fetch them into a second archive.`,
       ""
     );
@@ -886,7 +902,7 @@ function buildRunReport(
     lines.push(
       "",
       `NOT DOWNLOADED (${failedFiles.toLocaleString()})`,
-      `These files could not be retrieved after ${MAX_RETRIES} attempts and are missing from the archives.`,
+      `These files could not be retrieved after repeated attempts and are missing from the archives.`,
       `Use "Retry failed files" in the downloader to fetch them into a separate archive.`,
       ""
     );

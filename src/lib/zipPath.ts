@@ -70,6 +70,11 @@ export function displayFolderPath(
  * Duplicate paths (same name in the same folder, or two documents that both
  * convert to the same `.md`) are suffixed " (2)", " (3)", … instead of
  * silently overwriting each other.
+ *
+ * `usedPaths` holds comparison keys, not the paths themselves: Windows and
+ * macOS treat "Report.pdf" and "report.pdf" (and "Medical/" and "medical/")
+ * as the same name, so two entries differing only in case would extract to
+ * one file, the second replacing the first.
  */
 export function archivePath(
   folderParts: string[],
@@ -81,9 +86,14 @@ export function archivePath(
   return uniquePath(dir ? `${dir}/${base}` : base, usedPaths);
 }
 
+/** How a case-insensitive, Unicode-normalising file system sees a path. */
+function pathKey(path: string): string {
+  return path.normalize("NFC").toLowerCase();
+}
+
 function uniquePath(path: string, usedPaths: Set<string>): string {
-  if (!usedPaths.has(path)) {
-    usedPaths.add(path);
+  if (!usedPaths.has(pathKey(path))) {
+    usedPaths.add(pathKey(path));
     return path;
   }
   const slash = path.lastIndexOf("/");
@@ -93,8 +103,8 @@ function uniquePath(path: string, usedPaths: Set<string>): string {
   const ext = hasExt ? path.slice(dot) : "";
   for (let n = 2; ; n++) {
     const candidate = `${stem} (${n})${ext}`;
-    if (!usedPaths.has(candidate)) {
-      usedPaths.add(candidate);
+    if (!usedPaths.has(pathKey(candidate))) {
+      usedPaths.add(pathKey(candidate));
       return candidate;
     }
   }

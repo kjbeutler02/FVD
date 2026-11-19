@@ -1,9 +1,17 @@
 import type { FolderNode, DocumentItem, DocumentPage, LocatorResult } from "@/types/filevine";
 import {
+  DOWNLOAD_ETAG_HEADER,
+  DOWNLOAD_MAX_REQUESTS,
+  DOWNLOAD_OFFSET_HEADER,
+  DOWNLOAD_SIZE_HEADER,
+  DOWNLOAD_SPILL_BYTES,
+  DOWNLOAD_STALL_MS,
   FOLDER_RESOLVE_BATCH,
   FOLDER_SCAN_CONCURRENCY,
+  MAX_RETRIES,
   SCAN_RETRIES,
   SESSION_REFRESH_MARGIN_SECONDS,
+  THROTTLE_MAX_RETRIES,
 } from "@/lib/constants";
 
 export { displayFolderPath as buildFolderPath } from "@/lib/zipPath";
@@ -50,6 +58,33 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * Resolves once the browser has a network connection. While the machine is
+ * offline (Wi-Fi dropped, laptop lid closed) every request fails at once, and
+ * retrying on a timer would write off file after file in seconds; waiting for
+ * the connection costs nothing and lets a long run pick up where it was.
+ */
+function waitUntilOnline(signal?: AbortSignal): Promise<void> {
+  if (typeof navigator === "undefined" || navigator.onLine !== false) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
+    function cleanup() {
+      window.removeEventListener("online", onOnline);
+      signal?.removeEventListener("abort", onAbort);
+    }
+    function onOnline() {
+      cleanup();
+      resolve();
+    }
+    function onAbort() {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    }
+    window.addEventListener("online", onOnline, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /** Run `fn` up to `attempts` times, backing off between retryable failures. */
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -61,6 +96,7 @@ export async function withRetry<T>(
       return await fn();
     } catch (err) {
       if (attempt >= attempts || !isRetryable(err)) throw err;
+      await waitUntilOnline(signal);
       await sleep(retryDelay(err, attempt), signal);
     }
   }
@@ -75,22 +111,13 @@ export async function errorFromResponse(res: Response, fallback: string): Promis
 /* ------------------------------------------------------------- session */
 
 let sessionToken: string | null = null;
-// Expiry (ms since epoch) of `sessionToken`, read from its `exp` claim; 0 if unknown.
+// Expiry (ms since epoch, by this machine's clock) of `sessionToken`; 0 if unknown.
 let sessionExpiresAt = 0;
+// Attempts to mint a session token before giving up on the request that needed it.
+const SESSION_RETRIES = 3;
 // Concurrent 401s (four downloads hitting an expired token at once) share a
 // single refresh instead of each minting a new session.
 let refreshInFlight: Promise<string> | null = null;
-
-/** The `exp` claim of a JWT as ms since epoch, or 0 if it can't be read. */
-function tokenExpiry(token: string): number {
-  try {
-    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    const claims = JSON.parse(atob(payload));
-    return typeof claims.exp === "number" ? claims.exp * 1000 : 0;
-  } catch {
-    return 0;
-  }
-}
 
 /**
  * Whether the current token is still safely usable. Tokens are refreshed a
@@ -105,7 +132,11 @@ function tokenIsFresh(): boolean {
 
 function refreshSession(): Promise<string> {
   if (!refreshInFlight) {
-    refreshInFlight = (async () => {
+    // A token is renewed every few minutes of a long run; one failed renewal
+    // (Filevine busy, connection blip) is retried rather than failing every
+    // request that was waiting on it.
+    refreshInFlight = withRetry(async () => {
+      const requestedAt = Date.now();
       const res = await fetch("/api/fv-session", { method: "POST" });
       if (res.status === 401) {
         // The Entra session expired — send the user back through sign-in.
@@ -116,10 +147,16 @@ function refreshSession(): Promise<string> {
         throw await errorFromResponse(res, "Authentication failed");
       }
       const data = await res.json();
-      sessionToken = data.sessionToken;
-      sessionExpiresAt = tokenExpiry(sessionToken!);
-      return sessionToken!;
-    })().finally(() => {
+      if (typeof data.sessionToken !== "string" || data.sessionToken === "") {
+        throw new Error("Authentication failed: no session token was returned");
+      }
+      sessionToken = data.sessionToken as string;
+      // The token is opaque; the server states how long it lasts. Counted from
+      // when the request was sent, so the estimate errs on the early side.
+      sessionExpiresAt =
+        typeof data.expiresIn === "number" ? requestedAt + data.expiresIn * 1000 : 0;
+      return sessionToken;
+    }, SESSION_RETRIES).finally(() => {
       refreshInFlight = null;
     });
   }
@@ -291,6 +328,21 @@ export async function fetchDocumentPage(
   );
 }
 
+/**
+ * The cursor for the page after `page`. Filevine has said there is more; if
+ * the cursor cannot move forward, stopping would hand back a partial list as
+ * though it were the whole one, and the missing documents would simply never
+ * be downloaded. Refuse instead, so the scan fails visibly.
+ */
+function nextCursor(page: DocumentPage, lastId: number, soFar: number): number {
+  if (page.lastId == null || page.lastId === lastId) {
+    throw new Error(
+      `The document list could not be read completely (it stopped after ${soFar.toLocaleString()} documents). Nothing was downloaded — please try again.`
+    );
+  }
+  return page.lastId;
+}
+
 /** Paginate one folder's documents (server-scoped via folderId). */
 export async function fetchDocumentsForFolder(
   projectId: number,
@@ -306,8 +358,8 @@ export async function fetchDocumentsForFolder(
     const page = await fetchDocumentPage(projectId, lastId, 200, signal, folderId);
     docs.push(...page.items);
     hasMore = page.hasMore;
-    if (page.lastId == null || page.lastId === lastId) break;
-    lastId = page.lastId;
+    if (!hasMore) break;
+    lastId = nextCursor(page, lastId, docs.length);
   }
 
   return docs;
@@ -359,6 +411,9 @@ export async function fetchAllDocuments(
   signal?: AbortSignal
 ): Promise<DocumentItem[]> {
   const allDocs: DocumentItem[] = [];
+  // A document must appear once: the run tracks files by id, and a repeat
+  // would be zipped twice while the totals counted it once.
+  const seen = new Set<number>();
   let lastId = 0;
   let scanned = 0;
   let hasMore = true;
@@ -368,17 +423,16 @@ export async function fetchAllDocuments(
 
     const page = await fetchDocumentPage(projectId, lastId, 200, signal);
     scanned += page.items.length;
-    // Filter by selected folders if provided
-    const filtered = folderIds
-      ? page.items.filter((d) => folderIds.has(d.folderId))
-      : page.items;
-    allDocs.push(...filtered);
+    for (const doc of page.items) {
+      if (seen.has(doc.documentId)) continue;
+      seen.add(doc.documentId);
+      // Filter by selected folders if provided
+      if (!folderIds || folderIds.has(doc.folderId)) allDocs.push(doc);
+    }
     onProgress?.(allDocs.length, scanned);
     hasMore = page.hasMore;
-
-    // Stop if the cursor can't advance, to avoid an infinite scan loop.
-    if (page.lastId == null || page.lastId === lastId) break;
-    lastId = page.lastId;
+    if (!hasMore) break;
+    lastId = nextCursor(page, lastId, scanned);
   }
 
   return allDocs;
@@ -397,18 +451,166 @@ export async function fetchLocators(documentIds: number[]): Promise<LocatorResul
   return data.locators;
 }
 
+/** What has arrived of one file so far, across however many requests it takes. */
+interface Transfer {
+  /** Received bytes in order, already handed to the browser as Blobs. */
+  pieces: Blob[];
+  received: number;
+  /** Size of the whole file as reported by storage, when it says. */
+  total: number | null;
+  /** Storage's version tag for the file; resuming is only valid against the same one. */
+  etag: string | null;
+  type: string;
+}
+
+function resetTransfer(t: Transfer): void {
+  t.pieces = [];
+  t.received = 0;
+  t.total = null;
+  t.etag = null;
+}
+
+function headerNumber(res: Response, name: string): number | null {
+  const value = res.headers.get(name);
+  return value != null && /^\d+$/.test(value) ? Number(value) : null;
+}
+
+/**
+ * One request for a file's bytes, starting at the first byte not yet held.
+ * Whatever arrives is kept in `t` even if the request then fails, so the next
+ * one continues from there instead of starting the file again.
+ */
+async function receive(documentId: number, t: Transfer, signal?: AbortSignal): Promise<void> {
+  // Abort this request if the transfer stalls, so it can be continued rather
+  // than left waiting forever on a connection the server already dropped.
+  const attempt = new AbortController();
+  const onCancel = () => attempt.abort();
+  signal?.addEventListener("abort", onCancel, { once: true });
+  if (signal?.aborted) attempt.abort();
+  let stalled = false;
+  let lastByteAt = Date.now();
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastByteAt >= DOWNLOAD_STALL_MS) {
+      stalled = true;
+      attempt.abort();
+    }
+  }, 5000);
+
+  let pending: Uint8Array<ArrayBuffer>[] = [];
+  let pendingBytes = 0;
+  // Blob (not ArrayBuffer) so the browser can spill large files to disk
+  // instead of holding every byte in JS heap memory.
+  const spill = () => {
+    if (pendingBytes === 0) return;
+    t.pieces.push(new Blob(pending));
+    pending = [];
+    pendingBytes = 0;
+  };
+
+  try {
+    const res = await fetchWithAuth("/api/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        documentId,
+        offset: t.received,
+        ...(t.received > 0 && t.etag ? { etag: t.etag } : {}),
+      }),
+      signal: attempt.signal,
+    });
+    if (!res.ok) throw await errorFromResponse(res, `Download failed (HTTP ${res.status})`);
+
+    const start = headerNumber(res, DOWNLOAD_OFFSET_HEADER) ?? 0;
+    const total = headerNumber(res, DOWNLOAD_SIZE_HEADER);
+    if (start === 0) {
+      // The whole file from the top (first request, or storage would not resume).
+      if (t.received > 0) resetTransfer(t);
+    } else if (start !== t.received || (t.total != null && total != null && total !== t.total)) {
+      // Not a continuation of what we hold. Drop it and start the file over.
+      await res.body?.cancel().catch(() => {});
+      resetTransfer(t);
+      throw new TypeError("Download could not be resumed; starting the file again");
+    }
+    if (total != null) t.total = total;
+    t.etag = res.headers.get(DOWNLOAD_ETAG_HEADER) ?? t.etag;
+    t.type = res.headers.get("Content-Type") ?? t.type;
+
+    if (!res.body) {
+      const blob = await res.blob();
+      t.pieces.push(blob);
+      t.received += blob.size;
+      return;
+    }
+
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lastByteAt = Date.now();
+      pending.push(value);
+      pendingBytes += value.byteLength;
+      t.received += value.byteLength;
+      if (pendingBytes >= DOWNLOAD_SPILL_BYTES) spill();
+    }
+  } catch (err) {
+    // A stall is a network failure: TypeError makes it retryable.
+    if (stalled && !signal?.aborted) {
+      throw new TypeError(`Download stalled: no data for ${DOWNLOAD_STALL_MS / 1000} seconds`);
+    }
+    throw err;
+  } finally {
+    spill();
+    clearInterval(watchdog);
+    signal?.removeEventListener("abort", onCancel);
+  }
+}
+
+/**
+ * Download one document through the proxy, complete or not at all.
+ *
+ * A request can end before the file does: the connection drops, the transfer
+ * stalls, or a very large file outlasts the proxy's time limit. Each time,
+ * the next request asks only for the bytes still missing, so a file of any
+ * size gets through as long as requests keep making progress. Only requests
+ * that deliver nothing count against the retry budget. The result is checked
+ * against the size storage reported, so a file cut short is an error here and
+ * never a silently truncated entry in the archive.
+ */
 export async function downloadFileViaProxy(
   documentId: number,
   signal?: AbortSignal
 ): Promise<Blob> {
-  const res = await fetchWithAuth("/api/download", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ documentId }),
-    signal,
-  });
-  if (!res.ok) throw await errorFromResponse(res, `Download failed (HTTP ${res.status})`);
-  // Blob (not ArrayBuffer) so the browser can spill large files to disk
-  // instead of holding every byte in JS heap memory.
-  return res.blob();
+  const t: Transfer = { pieces: [], received: 0, total: null, etag: null, type: "" };
+  let idle = 0; // consecutive requests that delivered nothing
+
+  for (let request = 1; ; request++) {
+    const before = t.received;
+    try {
+      await receive(documentId, t, signal);
+      if (t.total != null && t.received !== t.total) {
+        const got = t.received;
+        const want = t.total;
+        // More than the file holds cannot be repaired by resuming.
+        if (got > want) resetTransfer(t);
+        throw new TypeError(
+          `Download incomplete: received ${got.toLocaleString()} of ${want.toLocaleString()} bytes`
+        );
+      }
+      return new Blob(t.pieces, { type: t.type });
+    } catch (err) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      // The file changed in storage between requests: start it over.
+      const changed = err instanceof HttpError && err.status === 409;
+      if (changed) resetTransfer(t);
+      if (!changed && !isRetryable(err)) throw err;
+
+      idle = t.received > before ? 0 : idle + 1;
+      const throttled = err instanceof HttpError && err.status === 429;
+      const limit = throttled ? THROTTLE_MAX_RETRIES : MAX_RETRIES;
+      if (idle >= limit || request >= DOWNLOAD_MAX_REQUESTS) throw err;
+
+      await waitUntilOnline(signal);
+      await sleep(retryDelay(err, Math.max(idle, 1)), signal);
+    }
+  }
 }

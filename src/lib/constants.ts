@@ -7,7 +7,27 @@ export const SESSION_TTL_SECONDS = 15 * 60; // 15 minutes
 // expires, so a long download never hits the expiry mid-run.
 export const SESSION_REFRESH_MARGIN_SECONDS = 90;
 // Per-file download attempts (the proxy route already fails fast on bad input).
+// Only attempts that received nothing count: an attempt that moved the file
+// forward is resumed from where it stopped, however many that takes.
 export const MAX_RETRIES = 4;
+// Filevine throttling (HTTP 429) clears on its own; give it longer before
+// writing the file off.
+export const THROTTLE_MAX_RETRIES = 8;
+// Ceiling on requests for a single file, so a transfer that only ever
+// trickles cannot keep a run alive forever.
+export const DOWNLOAD_MAX_REQUESTS = 60;
+// A file download that receives no bytes for this long is abandoned and
+// retried. Guards against a proxy request killed mid-stream, which can leave
+// the browser waiting on a dead connection forever.
+export const DOWNLOAD_STALL_MS = 60_000;
+// Received bytes are folded into a Blob each time this many have arrived, so
+// the browser can move them out of JS memory (to disk, for large files).
+export const DOWNLOAD_SPILL_BYTES = 8 * 1024 * 1024;
+// Response headers on /api/download: the byte offset the body starts at, the
+// size of the whole file, and the storage ETag (sent back to resume).
+export const DOWNLOAD_OFFSET_HEADER = "X-FVD-Offset";
+export const DOWNLOAD_SIZE_HEADER = "X-FVD-Size";
+export const DOWNLOAD_ETAG_HEADER = "X-FVD-ETag";
 // Attempts per document-list page during the scan; one throttled page must
 // not abort the whole run.
 export const SCAN_RETRIES = 4;

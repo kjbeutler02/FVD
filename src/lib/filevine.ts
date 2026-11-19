@@ -66,7 +66,7 @@ export async function getAccessToken(
   });
 
   if (!res.ok) {
-    throw new Error(`Filevine auth failed: ${res.status} ${res.statusText}`);
+    throw new FilevineError(`Filevine auth failed: ${res.status} ${res.statusText}`, res.status);
   }
 
   const data: TokenResponse = await res.json();
@@ -85,7 +85,7 @@ export async function getOrgAndUserIds(
   });
 
   if (!res.ok) {
-    throw new Error(`Failed to get org/user IDs: ${res.status}`);
+    throw new FilevineError(`Failed to get org/user IDs: ${res.status}`, res.status);
   }
 
   const info = await res.json();
@@ -238,7 +238,7 @@ export async function fetchDocumentPage(
   });
   // Server-side folder scoping (confirmed supported as a singular `folderId`).
   if (folderId != null) params.set("folderId", String(folderId));
-  const res = await fetch(`${API_ROOT}/DocumentSeries?${params}`, { headers });
+  const res = await fetchWithBackoff(`${API_ROOT}/DocumentSeries?${params}`, headers);
   if (!res.ok) {
     throw new FilevineError(`Failed to fetch documents: ${res.status}`, res.status);
   }
@@ -251,6 +251,15 @@ export async function fetchDocumentPage(
     const lastDoc = items[items.length - 1];
     nextLastId = lastDoc?.documentId?.native ?? null;
   }
+  // Filevine says there is more, but gave nothing to continue from. Ending the
+  // scan here would silently drop every remaining document, so fail the page
+  // (the client retries it) instead of passing it off as the last one.
+  if (hasMore && (nextLastId == null || nextLastId === lastId)) {
+    throw new FilevineError(
+      `Filevine returned an incomplete document page after document ${lastId}`,
+      502
+    );
+  }
 
   return { items, hasMore, lastId: nextLastId };
 }
@@ -259,7 +268,9 @@ export async function fetchLocator(
   docId: number,
   headers: Record<string, string>
 ): Promise<{ url: string }> {
-  const res = await fetch(`${API_ROOT}/Documents/${docId}/locator`, { headers });
+  // Thousands of these run back to back in a whole-project download, which is
+  // exactly when Filevine throttles; wait it out here rather than fail the file.
+  const res = await fetchWithBackoff(`${API_ROOT}/Documents/${docId}/locator`, headers);
   if (!res.ok) {
     throw new FilevineError(`Failed to get locator for doc ${docId}: ${res.status}`, res.status);
   }

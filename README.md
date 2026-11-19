@@ -28,16 +28,35 @@ as a reviewed batch or by watching a local folder.
    chains, before the review step. A folder that still cannot be identified
    is never silently dropped to the root: its documents go under
    `_Unknown folder <id>` and the review screen shows the count.
-5. Files are fetched four at a time with retries (throttling backs off longer).
+5. Files are fetched four at a time. A transfer that is cut off (dropped
+   connection, a stall, or a file too large for one request's five-minute
+   limit) is **resumed from the byte it stopped at**, so file size is not a
+   limit; only requests that deliver nothing count against the retry budget
+   (throttling is given longer, and nothing is retried while the computer is
+   offline). Every file is checked against the size storage reports before it
+   enters the ZIP, so a file is either complete or reported as failed, never
+   silently truncated.
    Folder and file names are sanitised so the ZIP extracts cleanly on Windows;
-   duplicates are suffixed ` (2)`, ` (3)`, ….
+   duplicates are suffixed ` (2)`, ` (3)`, …, compared without regard to case
+   and across all parts of a split run, so extracting every part into one
+   folder never overwrites a file.
 6. If anything fails, the missing files are listed in the drawer and in
    `_DOWNLOAD REPORT.txt` inside the archive, and **Retry failed files** fetches
    just those into a second ZIP.
 7. The internal Filevine session token lives 15 minutes. The client renews it
    90 seconds before expiry, and the API routes answer an expired token with
    `401` (never `500`) so the client refreshes and retries instead of failing
-   the file. Long runs are unaffected by the token lifetime.
+   the file. Long runs are unaffected by the token lifetime. A renewal that
+   fails because Filevine is busy is retried; only an expired Microsoft
+   sign-in sends the user back to the sign-in page.
+8. The document list is read to the end or not at all: if Filevine reports
+   more documents but the list cannot be continued, the scan stops with an
+   error rather than presenting a partial list as the whole matter.
+
+**To download an entire matter**, use **Select all**. That scans the whole
+project, which also picks up documents in archived folders and documents
+filed directly in the project root; neither appears in the folder browser, so
+a selection made folder by folder does not include them.
 
 ## Upload flow
 
@@ -102,7 +121,7 @@ variables in **Vercel → Project Settings → Environment Variables**.
 | `AUTH_MICROSOFT_ENTRA_ID_ISSUER` | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
 | `FILEVINE_PAT` | Filevine personal access token |
 | `FILEVINE_CLIENT_ID` / `FILEVINE_CLIENT_SECRET` | Filevine API client |
-| `SESSION_SECRET` | Signs the short-lived internal Filevine session JWT and upload tickets |
+| `SESSION_SECRET` | Encrypts the short-lived internal Filevine session token and signs upload tickets |
 | `BLOB_READ_WRITE_TOKEN` | Optional. Added automatically when a Vercel Blob store is connected; enables uploads over 4 MB |
 
 `AUTH_SECRET` must be set in production or sessions silently fail.
@@ -131,5 +150,7 @@ variables in **Vercel → Project Settings → Environment Variables**.
 - `src/app/page.tsx` — server-side `auth()` check; renders the Microsoft
   sign-in landing or the app.
 - `src/app/api/fv-session/route.ts` — exchanges the server's Filevine PAT for
-  an access token and returns a short-lived signed JWT to the client; requires
-  an Entra session. All other `/api/*` routes verify that JWT.
+  an access token and returns it to the client sealed in a short-lived
+  **encrypted** token (JWE), so the browser can present it but never read the
+  Filevine credential inside; requires an Entra session. All other `/api/*`
+  routes decrypt and verify that token.

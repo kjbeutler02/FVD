@@ -335,11 +335,15 @@ export default function DriveView({
   };
 
   const handleDownload = () => {
-    if (allIds.size === 0 || allSelected) {
+    // Every folder selected means the whole project: scan it project-wide so
+    // documents in archived folders and in the project root (neither is in
+    // the tree) come too. Deselecting individual documents must not quietly
+    // narrow that to the listed folders, so they are passed as exclusions.
+    if (allIds.size === 0 || allFoldersSelected) {
       onDownload({
         folderIds: null,
         extraDocs: [],
-        excludedDocIds: new Set(),
+        excludedDocIds: new Set(excludedDocs.keys()),
         convertToMd: convertDocs,
       });
       return;
