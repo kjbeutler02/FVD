@@ -109,7 +109,7 @@ export default function HomeClient() {
     uploader.panelOpen && (uploader.progress.phase !== "idle" || uploader.watch?.active);
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-canvas">
+    <div className="flex h-dvh flex-col overflow-hidden bg-workspace">
       <Header />
       <WatchBar
         watch={uploader.watch}
@@ -136,6 +136,7 @@ export default function HomeClient() {
             rootFolderId={rootFolderId}
             onDownload={handleDownload}
             onUpload={handleUpload}
+            onChangeProject={handleNewProject}
             ref={driveRef}
           />
         </main>

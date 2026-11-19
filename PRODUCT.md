@@ -26,8 +26,8 @@ Voice: clean, formal, professional, credible. Three words: **Noticed, Believed, 
 ## Design Principles
 
 1. **Earned familiarity.** Borrow the proven file-browser model (Google Drive / Dropbox / OneDrive) so users navigate without learning anything. The tool disappears into the task.
-2. **Lawyer-appropriate restraint.** One brand color (deep blue), generous whitespace, hairline borders, at most a light shadow. Restraint is the brand.
-3. **The wordmark is the identity.** No symbol, no second logo. The deep-blue band and the STRONG & HANNI lockup carry recognition.
+2. **Lawyer-appropriate restraint.** One accent family (brand blue), generous whitespace, hairline rules, soft paper-like surfaces. Restraint is the brand. The visual system is the Strong & Hanni Design System (see DESIGN.md).
+3. **The wordmark is the identity.** No symbol, no second logo. The STRONG & HANNI lockup, the navy anchor and the asymmetric surface curve carry recognition.
 4. **Honest about the model.** Selecting a folder downloads everything inside it; the UI must make that consequence legible before the click.
 5. **Every state designed.** Loading (scan), empty folders, errors, partial-failure downloads — all branded and explained, never a dead end.
 

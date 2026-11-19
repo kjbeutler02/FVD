@@ -1,44 +1,140 @@
 @import "tailwindcss";
 
 /* ----------------------------------------------------------------------------
-   Strong & Hanni brand tokens
-   Source: 002_BRAND_GUIDE.md. Restrained product palette: one brand color
-   (deep blue), tinted neutrals, accent reserved for action + selection.
+   Strong & Hanni Design System tokens
+   Calm, authoritative, paper-adjacent. One accent family (brand blue),
+   restrained semantic colors, and a signature asymmetric surface curve.
+   See DESIGN.md. Token names and values follow the firm design system.
 ---------------------------------------------------------------------------- */
 :root {
-  --brand: #1e2a6b;
-  --brand-dark: #161f54;
-  --brand-light: #2a3a8a;
-  --brand-tint: #eaecf4;
+  /* Brand blue: the only accent family */
+  --sh-navy: #1e2a6b;
+  --sh-navy-deep: #151f57;
+  --sh-blue: #4f63c4;
+  --sh-blue-soft: #7080d0;
+  --sh-ice: #eef1fb;
+  --sh-ice-deep: #e4e9f8;
 
-  --ink: #0a0a0a;
-  --muted: #6b7280;
+  /* Surfaces */
+  --sh-workspace: #edf2fc;
+  --sh-paper: #f8f9fc;
+  --sh-surface: rgba(255, 255, 255, 0.9);
+  --sh-surface-nav: rgba(255, 255, 255, 0.86);
+  --sh-surface-solid: #ffffff;
 
-  --canvas: #f5f6f8;
-  --surface: #ffffff;
-  --line: #e5e7eb;
+  /* Text */
+  --sh-ink: #171a26;
+  --sh-text-secondary: #737c91;
+  --sh-text-tertiary: #7b849a;
+  --sh-text-on-navy: #ffffff;
+  --sh-text-on-navy-soft: #c3cbf0;
 
-  --success: #15803d;
-  --error: #b91c1c;
+  /* Line */
+  --sh-line: #dfe3ed;
+  --sh-line-strong: #ced5e4;
+  --sh-line-on-navy: rgba(255, 255, 255, 0.14);
+
+  /* Semantic: state only, never decoration */
+  --sh-success: #2f7a58;
+  --sh-success-bg: #eaf5ef;
+  --sh-info: #5365b5;
+  --sh-info-bg: #edf0fb;
+  --sh-warning: #9b5d19;
+  --sh-warning-bg: #fff3e3;
+  --sh-error: #a6414a;
+  --sh-error-bg: #fbecef;
+
+  --sh-focus-ring: rgba(79, 99, 196, 0.35);
+  --sh-scrim: rgba(21, 31, 87, 0.32);
+
+  /* Shape */
+  --sh-radius-content: 18px 42px 18px 42px; /* signature */
+  --sh-radius-anchor: 42px 18px 42px 18px; /* signature, mirrored */
+
+  /* Elevation */
+  --sh-blur-surface: saturate(1.1) blur(14px);
+
+  /* Motion */
+  --sh-ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+  --sh-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @theme inline {
-  --color-brand: var(--brand);
-  --color-brand-dark: var(--brand-dark);
-  --color-brand-light: var(--brand-light);
-  --color-brand-tint: var(--brand-tint);
+  --color-navy: var(--sh-navy);
+  --color-navy-deep: var(--sh-navy-deep);
+  --color-blue: var(--sh-blue);
+  --color-blue-soft: var(--sh-blue-soft);
+  --color-ice: var(--sh-ice);
+  --color-ice-deep: var(--sh-ice-deep);
 
-  --color-ink: var(--ink);
-  --color-muted: var(--muted);
+  --color-workspace: var(--sh-workspace);
+  --color-paper: var(--sh-paper);
+  --color-surface: var(--sh-surface);
+  --color-surface-nav: var(--sh-surface-nav);
+  --color-solid: var(--sh-surface-solid);
 
-  --color-canvas: var(--canvas);
-  --color-surface: var(--surface);
-  --color-line: var(--line);
+  --color-ink: var(--sh-ink);
+  --color-secondary: var(--sh-text-secondary);
+  --color-tertiary: var(--sh-text-tertiary);
+  --color-on-navy-soft: var(--sh-text-on-navy-soft);
 
-  --color-success: var(--success);
-  --color-error: var(--error);
+  --color-line: var(--sh-line);
+  --color-line-strong: var(--sh-line-strong);
+  --color-line-on-navy: var(--sh-line-on-navy);
 
-  --font-sans: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+  --color-success: var(--sh-success);
+  --color-success-bg: var(--sh-success-bg);
+  --color-info: var(--sh-info);
+  --color-info-bg: var(--sh-info-bg);
+  --color-warning: var(--sh-warning);
+  --color-warning-bg: var(--sh-warning-bg);
+  --color-error: var(--sh-error);
+  --color-error-bg: var(--sh-error-bg);
+
+  --color-focus: var(--sh-focus-ring);
+  --color-scrim: var(--sh-scrim);
+
+  --font-sans: var(--font-manrope), -apple-system, "Segoe UI", sans-serif;
+  --font-serif: var(--font-source-serif), Georgia, serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  /* Type scale (15px body) */
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 1.4;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.5;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.5;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.6;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.5;
+  --text-xl: 1.1875rem;
+  --text-xl--line-height: 1.25;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 1.25;
+  --text-3xl: 2rem;
+  --text-3xl--line-height: 1.25;
+  --text-4xl: 2.5rem;
+  --text-4xl--line-height: 1.15;
+
+  --tracking-display: -0.02em;
+  --tracking-heading: -0.012em;
+  --tracking-label: 0.08em;
+
+  --radius-check: 6px;
+  --radius-inset: 14px;
+  --radius-panel: 16px;
+  --radius-nav: 18px;
+  --radius-shell: 28px;
+
+  --shadow-nav: 0 8px 24px rgba(30, 42, 107, 0.06);
+  --shadow-surface: 0 16px 42px rgba(30, 42, 107, 0.08);
+  --shadow-raised: 0 2px 6px rgba(30, 42, 107, 0.06);
+  --shadow-anchor: 0 20px 48px rgba(21, 31, 87, 0.18);
+  --shadow-overlay: 0 32px 80px rgba(21, 31, 87, 0.22);
+
+  --ease-sh: var(--sh-ease);
 
   /* Semantic z-index scale */
   --z-sticky: 20;
@@ -48,40 +144,116 @@
 }
 
 * {
-  border-color: var(--line);
+  border-color: var(--sh-line);
 }
 
 html {
-  background: var(--canvas);
+  background: var(--sh-workspace);
 }
 
 body {
-  background: var(--canvas);
-  color: var(--ink);
+  background: var(--sh-workspace);
+  color: var(--sh-ink);
   font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 h1,
 h2,
-h3 {
+h3,
+h4 {
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.012em;
   text-wrap: balance;
 }
 
-/* Brand-blue focus ring across all interactive elements */
+/* Medium blue marks interaction: focus on every interactive element */
 :where(button, a, input, [tabindex]):focus-visible {
-  outline: 2px solid var(--brand-light);
+  outline: 2px solid var(--sh-blue);
   outline-offset: 2px;
-  border-radius: 2px;
 }
 
-/* Drawer + reveal motion */
+/* ---------------------------------------------------------------- surfaces */
+
+/* Level 2: the primary content surface, with the signature 18/42 curve. */
+.sh-content-surface {
+  background: var(--sh-surface);
+  border-radius: var(--sh-radius-content);
+  box-shadow: var(--shadow-surface);
+  -webkit-backdrop-filter: var(--sh-blur-surface);
+  backdrop-filter: var(--sh-blur-surface);
+}
+
+/* Level 3: the navy anchor (the current matter), mirrored 42/18 curve. */
+.sh-anchor-surface {
+  background: var(--sh-navy);
+  color: var(--sh-text-on-navy);
+  border-radius: var(--sh-radius-anchor);
+  box-shadow: var(--shadow-anchor);
+}
+
+/* Level 1: floating navigation. */
+.sh-nav-surface {
+  background: var(--sh-surface-nav);
+  border-radius: var(--radius-nav);
+  box-shadow: var(--shadow-nav);
+  -webkit-backdrop-filter: var(--sh-blur-surface);
+  backdrop-filter: var(--sh-blur-surface);
+}
+
+/* Overlay panel (drawer): opaque, carries the content curve. */
+.sh-overlay-surface {
+  background: var(--sh-surface-solid);
+  box-shadow: var(--shadow-overlay);
+}
+@media (min-width: 640px) {
+  .sh-overlay-surface {
+    border-radius: var(--sh-radius-content);
+  }
+}
+
+/* Uppercase micro-label. */
+.sh-eyebrow {
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sh-text-tertiary);
+}
+.sh-anchor-surface .sh-eyebrow {
+  color: var(--sh-text-on-navy-soft);
+}
+
+/* Extends a small control's hit area to the 44px minimum without growing it:
+   .sh-hit for 20px controls (checkboxes), .sh-hit-sm for 36px-tall buttons. */
+.sh-hit,
+.sh-hit-sm {
+  position: relative;
+}
+.sh-hit::after,
+.sh-hit-sm::after {
+  content: "";
+  position: absolute;
+  inset: -12px;
+}
+.sh-hit-sm::after {
+  inset: -4px 0;
+}
+
+/* ------------------------------------------------------------------ motion */
+
 @keyframes sh-drawer-in {
   from {
-    transform: translateX(100%);
+    opacity: 0;
+    transform: translateX(32px);
   }
   to {
+    opacity: 1;
     transform: translateX(0);
   }
 }
@@ -107,15 +279,15 @@ h3 {
 }
 
 .sh-drawer {
-  animation: sh-drawer-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: sh-drawer-in 280ms var(--sh-ease-out);
 }
 
 .sh-backdrop {
-  animation: sh-fade-in 200ms ease-out;
+  animation: sh-fade-in 180ms var(--sh-ease);
 }
 
 .sh-rise {
-  animation: sh-rise-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: sh-rise-in 280ms var(--sh-ease-out) both;
 }
 
 @media (prefers-reduced-motion: reduce) {

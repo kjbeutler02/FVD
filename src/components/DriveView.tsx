@@ -2,6 +2,8 @@
 
 import { useState, useMemo, useCallback, useRef, useImperativeHandle } from "react";
 import {
+  AlertTriangle,
+  ArrowLeftRight,
   ChevronRight,
   ChevronDown,
   ChevronLeft,
@@ -9,10 +11,7 @@ import {
   Folder,
   FolderOpen,
   Folders,
-  Check,
-  Minus,
   Download,
-  Loader2,
   Search,
   LayoutGrid,
   List as ListIcon,
@@ -20,12 +19,21 @@ import {
   Upload,
 } from "lucide-react";
 import { fetchDocumentsForFolder } from "@/lib/api";
-import { filesFromDrop } from "@/lib/localFiles";
+import { filesFromDrop, formatBytes } from "@/lib/localFiles";
+import {
+  Button,
+  Checkbox,
+  Eyebrow,
+  IconButton,
+  Spinner,
+  StatusBand,
+  Switch,
+  type CheckState,
+} from "@/components/ui";
 import type { DocumentItem, FolderNode } from "@/types/filevine";
 import type { DownloadSelection } from "@/types/download";
 import type { LocalFile, UploadDestination } from "@/types/upload";
 
-type CheckState = "checked" | "unchecked" | "indeterminate";
 type ViewMode = "list" | "grid";
 
 interface Props {
@@ -36,6 +44,8 @@ interface Props {
   onDownload: (selection: DownloadSelection) => void;
   /** Open the upload drawer for a destination, with any files already dropped. */
   onUpload: (destination: UploadDestination, files: LocalFile[]) => void;
+  /** Leave this project and return to the project-entry screen. */
+  onChangeProject: () => void;
   ref?: React.Ref<DriveViewHandle>;
 }
 
@@ -99,6 +109,7 @@ export default function DriveView({
   rootFolderId,
   onDownload,
   onUpload,
+  onChangeProject,
   ref,
 }: Props) {
   const { byId, parentById, allIds } = useMemo(() => {
@@ -417,85 +428,108 @@ export default function DriveView({
   const loadingDocs =
     currentFolderId != null && docsLoading.has(currentFolderId);
 
-  return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-1 overflow-hidden">
-      {/* Sidebar */}
-      <aside className="hidden w-72 shrink-0 flex-col border-r border-line bg-surface lg:flex">
-        <div className="border-b border-line px-5 py-5">
-          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-muted">
-            Project
-          </p>
-          <p className="mt-1 text-xl font-bold text-ink">#{projectId}</p>
-          <p className="mt-0.5 text-xs font-light text-muted">
-            {allIds.size} {allIds.size === 1 ? "folder" : "folders"}
-          </p>
-        </div>
+  const selectionSummary =
+    allIds.size === 0
+      ? "Whole project"
+      : allSelected
+      ? "All folders selected"
+      : `${selected.size} of ${allIds.size} folders${
+          extraDocs.size > 0 ? ` +${extraDocs.size} ${extraDocs.size === 1 ? "file" : "files"}` : ""
+        }${
+          excludedDocs.size > 0 ? ` −${excludedDocs.size} ${excludedDocs.size === 1 ? "file" : "files"}` : ""
+        }`;
 
-        <nav className="flex-1 overflow-y-auto px-2.5 py-3">
-          <SidebarItem
-            label="All Folders"
-            icon={<Folders size={16} strokeWidth={1.75} />}
-            depth={0}
-            active={currentFolderId == null && !searching}
-            onClick={() => navigate(null)}
-          />
-          {tree.map((node) => (
-            <SidebarNode
-              key={node.id}
-              node={node}
-              depth={1}
-              currentFolderId={searching ? -1 : currentFolderId}
-              expanded={expanded}
-              onNavigate={navigate}
-              onToggleExpand={toggleExpand}
+  return (
+    <div className="mx-auto flex min-h-0 w-full max-w-[1180px] flex-1 flex-col gap-3 px-3 pb-3 pt-3 lg:flex-row lg:gap-5 lg:pt-4">
+      {/* Navy anchor: the current project. A strip on small screens, a panel
+          above the folder tree from lg up. */}
+      <aside className="flex shrink-0 flex-col gap-4 lg:w-[272px]">
+        <section className="sh-anchor-surface flex items-center justify-between gap-4 px-6 py-4 max-lg:rounded-[28px_14px_28px_14px] lg:block lg:p-7">
+          <div className="min-w-0">
+            <Eyebrow>Current project</Eyebrow>
+            <p className="mt-1 truncate font-mono text-2xl font-medium leading-tight text-white lg:mt-2 lg:text-3xl">
+              #{projectId}
+            </p>
+            <p className="mt-1 hidden text-sm text-on-navy-soft lg:block">
+              {allIds.size.toLocaleString()} {allIds.size === 1 ? "folder" : "folders"}
+            </p>
+          </div>
+          <div className="shrink-0 lg:mt-6 lg:border-t lg:border-line-on-navy lg:pt-2">
+            <button
+              type="button"
+              onClick={onChangeProject}
+              className="inline-flex min-h-11 items-center gap-2 rounded-full text-sm font-semibold text-white transition-colors duration-[180ms] ease-sh hover:text-on-navy-soft focus-visible:outline-white"
+            >
+              <ArrowLeftRight size={15} />
+              <span className="max-sm:sr-only">Open another project</span>
+            </button>
+          </div>
+        </section>
+
+        <nav aria-label="Folders" className="hidden min-h-0 flex-1 flex-col lg:flex">
+          <Eyebrow className="px-4 pb-2">Folders</Eyebrow>
+          <div className="min-h-0 flex-1 overflow-y-auto pb-2 pr-1">
+            <SidebarItem
+              label="All Folders"
+              icon={<Folders size={16} strokeWidth={1.75} />}
+              depth={0}
+              active={currentFolderId == null && !searching}
+              onClick={() => navigate(null)}
             />
-          ))}
+            {tree.map((node) => (
+              <SidebarNode
+                key={node.id}
+                node={node}
+                depth={1}
+                currentFolderId={searching ? -1 : currentFolderId}
+                expanded={expanded}
+                onNavigate={navigate}
+                onToggleExpand={toggleExpand}
+              />
+            ))}
+          </div>
         </nav>
       </aside>
 
-      {/* Main */}
-      <div
-        className="relative flex min-w-0 flex-1 flex-col"
+      {/* The one content surface: path, tools, listing and actions. */}
+      <section
+        className="sh-content-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
         onDragEnter={onDragEnter}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
       >
         {dragging && uploadDest && (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-brand-tint/80 backdrop-blur-[1px]">
-            <div className="flex flex-col items-center gap-2 rounded-md border border-brand bg-surface px-8 py-6 text-center shadow-sm">
-              <Upload size={26} strokeWidth={1.5} className="text-brand" />
-              <p className="text-sm font-semibold text-ink">
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-ice/85 backdrop-blur-[2px]">
+            <div className="flex max-w-sm flex-col items-center gap-2 rounded-panel bg-solid px-8 py-7 text-center shadow-raised">
+              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-ice text-navy">
+                <Upload size={22} strokeWidth={1.75} />
+              </span>
+              <p className="mt-1 text-base font-semibold text-ink">
                 Drop to upload into {currentFolderId != null ? uploadTargetName : "the project root"}
               </p>
-              <p className="text-xs font-light text-muted">You will review the list before anything is sent.</p>
+              <p className="text-sm text-secondary">You will review the list before anything is sent.</p>
             </div>
           </div>
         )}
-        {/* Toolbar */}
-        <div className="flex flex-col gap-3 border-b border-line bg-surface px-4 py-3 sm:px-6">
-          <div className="flex items-center gap-2">
+
+        {/* Path and tools */}
+        <div className="flex flex-col gap-4 px-5 pb-4 pt-5 sm:px-7 sm:pt-6">
+          <div className="flex min-h-11 items-center gap-1">
             {currentFolderId != null && !searching && (
-              <button
-                type="button"
-                onClick={() =>
-                  navigate(parentById.get(currentFolderId) ?? null)
-                }
-                aria-label="Go up one level"
-                className="-ml-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted transition-colors hover:bg-canvas hover:text-ink"
+              <IconButton
+                label="Go up one level"
+                className="-ml-2"
+                onClick={() => navigate(parentById.get(currentFolderId) ?? null)}
               >
                 <ChevronLeft size={18} />
-              </button>
+              </IconButton>
             )}
-            <Breadcrumb
-              crumbs={crumbs}
-              searching={searching}
-              onNavigate={navigate}
-            />
+            <Breadcrumb crumbs={crumbs} searching={searching} onNavigate={navigate} />
           </div>
 
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3 pl-[13px] sm:pl-[17px]">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+            <div className="flex min-w-0 items-center gap-3 pl-3">
               {viewNodes.length > 0 && (
                 <Checkbox
                   state={viewState}
@@ -509,7 +543,7 @@ export default function DriveView({
                   }
                 />
               )}
-              <p className="truncate text-xs font-light text-muted">
+              <p className="truncate text-sm text-secondary">
                 {searching
                   ? `${items.length} ${items.length === 1 ? "match" : "matches"}`
                   : `${items.length} ${items.length === 1 ? "folder" : "folders"}${
@@ -526,40 +560,33 @@ export default function DriveView({
               <div className="relative">
                 <Search
                   size={15}
-                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+                  className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-tertiary"
                 />
                 <input
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Filter folders"
-                  className="w-36 rounded-sm border border-line bg-surface py-1.5 pl-8 pr-7 text-sm text-ink placeholder-muted/70 transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand-light/40 sm:w-52"
+                  aria-label="Filter folders"
+                  className="h-11 w-40 rounded-full border border-line bg-solid pl-10 pr-10 text-sm text-ink placeholder:text-tertiary transition-[border-color,box-shadow] duration-[180ms] ease-sh focus:border-blue focus:outline-none focus:ring-[3px] focus:ring-focus sm:w-56"
                 />
                 {searching && (
-                  <button
-                    type="button"
+                  <IconButton
+                    label="Clear filter"
+                    size="sm"
+                    className="absolute right-1 top-1/2 -translate-y-1/2"
                     onClick={() => setQuery("")}
-                    aria-label="Clear filter"
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted hover:text-ink"
                   >
                     <X size={14} />
-                  </button>
+                  </IconButton>
                 )}
               </div>
 
-              <div className="flex items-center rounded-sm border border-line p-0.5">
-                <ViewToggle
-                  active={view === "list"}
-                  onClick={() => setView("list")}
-                  label="List view"
-                >
+              <div className="flex items-center rounded-full bg-ice p-1" role="group" aria-label="View">
+                <ViewToggle active={view === "list"} onClick={() => setView("list")} label="List view">
                   <ListIcon size={16} />
                 </ViewToggle>
-                <ViewToggle
-                  active={view === "grid"}
-                  onClick={() => setView("grid")}
-                  label="Grid view"
-                >
+                <ViewToggle active={view === "grid"} onClick={() => setView("grid")} label="Grid view">
                   <LayoutGrid size={16} />
                 </ViewToggle>
               </div>
@@ -567,11 +594,11 @@ export default function DriveView({
           </div>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+        {/* Listing */}
+        <div className="min-h-0 flex-1 overflow-y-auto border-t border-line px-5 pb-6 sm:px-7">
           {items.length > 0 &&
             (view === "grid" ? (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-3">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 pt-5">
                 {items.map((node) => (
                   <FolderCard
                     key={node.id}
@@ -584,14 +611,14 @@ export default function DriveView({
                 ))}
               </div>
             ) : (
-              <div className="overflow-hidden rounded-md border border-line bg-surface">
-                {items.map((node, i) => (
+              <div role="list">
+                <ListHeading left={searching ? "Matching folders" : "Folders"} right="Contains" />
+                {items.map((node) => (
                   <FolderRow
                     key={node.id}
                     node={node}
                     state={nodeState(node)}
                     subtitle={searching ? pathLabel(node) : undefined}
-                    first={i === 0}
                     onOpen={() => navigate(node.id)}
                     onToggle={() => toggleSelect(node)}
                   />
@@ -601,40 +628,37 @@ export default function DriveView({
 
           {/* Documents in the open folder */}
           {!searching && currentFolderId != null && (
-            <div className={items.length > 0 ? "mt-5" : ""}>
+            <div className={items.length > 0 ? "mt-4" : ""}>
               {loadingDocs ? (
-                <div className="flex items-center gap-2 px-1 py-3 text-sm font-light text-muted">
-                  <Loader2 size={15} className="animate-spin" />
+                <div className="flex items-center gap-2.5 px-3 py-5 text-sm text-secondary">
+                  <Spinner size={15} />
                   Loading documents…
                 </div>
               ) : docsError ? (
-                <div className="flex items-center gap-3 rounded-md border border-line bg-surface px-4 py-3 text-sm">
-                  <span className="text-muted">{docsError}</span>
-                  <button
-                    type="button"
-                    onClick={() => loadDocs(currentFolderId)}
-                    className="font-medium text-brand hover:text-brand-dark"
-                  >
-                    Retry
-                  </button>
-                </div>
+                <StatusBand
+                  tone="error"
+                  className="mt-5"
+                  icon={<AlertTriangle size={16} />}
+                  action={
+                    <Button variant="secondary" size="sm" onClick={() => loadDocs(currentFolderId)}>
+                      Retry
+                    </Button>
+                  }
+                >
+                  <p>{docsError}</p>
+                </StatusBand>
               ) : currentDocs && currentDocs.length > 0 ? (
-                <>
-                  <p className="mb-2 px-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-muted">
-                    Documents
-                  </p>
-                  <div className="overflow-hidden rounded-md border border-line bg-surface">
-                    {currentDocs.map((doc, i) => (
-                      <DocRow
-                        key={doc.documentId}
-                        doc={doc}
-                        checked={isDocChecked(doc)}
-                        first={i === 0}
-                        onToggle={() => toggleDoc(doc)}
-                      />
-                    ))}
-                  </div>
-                </>
+                <div role="list">
+                  <ListHeading left="Documents" right="Size" />
+                  {currentDocs.map((doc) => (
+                    <DocRow
+                      key={doc.documentId}
+                      doc={doc}
+                      checked={isDocChecked(doc)}
+                      onToggle={() => toggleDoc(doc)}
+                    />
+                  ))}
+                </div>
               ) : null}
             </div>
           )}
@@ -658,168 +682,115 @@ export default function DriveView({
             ))}
         </div>
 
-        {/* Selection / download bar */}
-        <div className="flex flex-col gap-3 border-t border-line bg-surface px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <div className="flex items-center gap-3 text-sm">
-            <span className="font-medium text-ink">
-              {allIds.size === 0
-                ? "Whole project"
-                : allSelected
-                ? "All folders selected"
-                : `${selected.size} of ${allIds.size} folders${
-                    extraDocs.size > 0 ? ` +${extraDocs.size} ${extraDocs.size === 1 ? "file" : "files"}` : ""
-                  }${
-                    excludedDocs.size > 0 ? ` −${excludedDocs.size} ${excludedDocs.size === 1 ? "file" : "files"}` : ""
-                  }`}
-            </span>
-            {allIds.size > 0 && (
-              <div className="flex items-center gap-3 text-xs font-medium uppercase tracking-wider">
-                <button
-                  type="button"
-                  onClick={selectAll}
-                  disabled={allSelected}
-                  className="text-brand transition-colors hover:text-brand-dark disabled:text-muted/50"
-                >
-                  Select all
-                </button>
-                <span className="h-3 w-px bg-line" />
-                <button
-                  type="button"
-                  onClick={clearAll}
-                  disabled={noneSelected}
-                  className="text-brand transition-colors hover:text-brand-dark disabled:text-muted/50"
-                >
-                  Clear
-                </button>
-              </div>
-            )}
+        {/* Selection and actions */}
+        <div className="flex flex-col gap-x-6 gap-y-3 border-t border-line bg-paper/70 px-5 py-4 sm:px-7 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-1">
+              <span className="mr-2 text-sm font-semibold text-ink">{selectionSummary}</span>
+              {allIds.size > 0 && (
+                <>
+                  <Button variant="ghost" size="sm" onClick={selectAll} disabled={allSelected}>
+                    Select all
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={clearAll} disabled={noneSelected}>
+                    Clear
+                  </Button>
+                </>
+              )}
+            </div>
+            <Switch
+              checked={convertDocs}
+              onChange={setConvertDocs}
+              label="Convert documents to Markdown"
+            />
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-5">
-            <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-ink">
-              <Checkbox
-                state={convertDocs ? "checked" : "unchecked"}
-                onToggle={() => setConvertDocs((v) => !v)}
-              />
-              Convert documents to Markdown
-            </label>
-
-            <button
-              type="button"
+          <div className="flex shrink-0 items-center gap-3">
+            <Button
+              variant="secondary"
               onClick={() => uploadDest && onUpload(uploadDest, [])}
               disabled={!uploadDest}
               title={uploadDest ? `Upload files into ${uploadTargetName}` : "Open a folder to upload into it"}
-              className="flex items-center justify-center gap-2 rounded-sm border border-line bg-surface px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-ink transition-colors hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-50"
+              icon={<Upload size={16} />}
+              className="min-w-0 max-sm:px-4"
             >
-              <Upload size={17} />
-              <span className="truncate">
-                Upload to <span className="normal-case tracking-normal">{uploadTargetName}</span>
+              <span className="max-w-[12rem] truncate">
+                Upload<span className="max-sm:hidden"> to {uploadTargetName}</span>
               </span>
-            </button>
+            </Button>
 
-            <button
-              type="button"
+            <Button
               onClick={handleDownload}
               disabled={!canDownload}
-              className="flex items-center justify-center gap-2 rounded-sm bg-brand px-5 py-2.5 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
+              icon={<Download size={16} />}
+              className="max-sm:flex-1 max-sm:px-4"
             >
-              <Download size={17} />
               Review &amp; Download
-            </button>
+            </Button>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
 
 /* ---------------------------------------------------------------- pieces */
 
-function Checkbox({
-  state,
-  onToggle,
-  className = "",
-  label,
-}: {
-  state: CheckState;
-  onToggle: () => void;
-  className?: string;
-  label?: string;
-}) {
-  const active = state !== "unchecked";
+/** Register-table heading: uppercase micro-labels over a hairline. */
+function ListHeading({ left, right }: { left: string; right: string }) {
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-label={label}
-      title={label}
-      aria-checked={state === "indeterminate" ? "mixed" : state === "checked"}
-      onClick={(e) => {
-        e.stopPropagation();
-        onToggle();
-      }}
-      className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-sm border transition-colors ${
-        active
-          ? "border-brand bg-brand text-white"
-          : "border-line bg-surface hover:border-brand-light"
-      } ${className}`}
-    >
-      {state === "checked" && <Check size={12} strokeWidth={3} />}
-      {state === "indeterminate" && <Minus size={12} strokeWidth={3} />}
-    </button>
+    <div className="flex items-center justify-between gap-3 border-b border-line px-3 pb-2 pt-5">
+      <Eyebrow as="span" className="pl-8">
+        {left}
+      </Eyebrow>
+      <Eyebrow as="span" className="hidden pr-8 sm:block">
+        {right}
+      </Eyebrow>
+    </div>
   );
 }
+
+const ROW =
+  "group flex min-h-12 items-center gap-3 border-b border-line px-3 transition-colors duration-[120ms] ease-sh";
 
 function FolderRow({
   node,
   state,
   subtitle,
-  first,
   onOpen,
   onToggle,
 }: {
   node: FolderNode;
   state: CheckState;
   subtitle?: string;
-  first: boolean;
   onOpen: () => void;
   onToggle: () => void;
 }) {
   const selected = state !== "unchecked";
   const count = node.children.length;
   return (
-    <div
-      className={`group flex items-center gap-3 px-3 py-2.5 transition-colors sm:px-4 ${
-        first ? "" : "border-t border-line"
-      } ${selected ? "bg-brand-tint" : "hover:bg-canvas"}`}
-    >
-      <Checkbox state={state} onToggle={onToggle} />
+    <div role="listitem" className={`${ROW} ${selected ? "bg-ice/60 hover:bg-ice" : "hover:bg-ice"}`}>
+      <Checkbox state={state} onToggle={onToggle} label={`Select ${node.name}`} />
       <button
         type="button"
         onClick={onOpen}
-        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        className="flex min-h-12 min-w-0 flex-1 items-center gap-3 py-2 text-left"
       >
         <Folder
           size={18}
           strokeWidth={1.75}
-          className={selected ? "shrink-0 text-brand" : "shrink-0 text-brand/70"}
+          className={selected ? "shrink-0 text-navy" : "shrink-0 text-blue-soft"}
         />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-ink">
-            {node.name}
-          </span>
-          {subtitle && (
-            <span className="block truncate text-xs font-light text-muted">
-              {subtitle}
-            </span>
-          )}
+          <span className="block truncate text-sm font-medium text-ink">{node.name}</span>
+          {subtitle && <span className="block truncate text-xs text-secondary">{subtitle}</span>}
         </span>
-        <span className="hidden shrink-0 text-xs font-light text-muted sm:block">
+        <span className="hidden shrink-0 text-xs text-secondary sm:block">
           {count === 0 ? "No subfolders" : `${count} ${count === 1 ? "subfolder" : "subfolders"}`}
         </span>
         <ChevronRight
           size={16}
-          className="shrink-0 text-muted/50 transition-colors group-hover:text-muted"
+          className="shrink-0 text-line-strong transition-colors group-hover:text-blue"
         />
       </button>
     </div>
@@ -829,34 +800,35 @@ function FolderRow({
 function DocRow({
   doc,
   checked,
-  first,
   onToggle,
 }: {
   doc: DocumentItem;
   checked: boolean;
-  first: boolean;
   onToggle: () => void;
 }) {
   return (
-    <div
-      className={`group flex items-center gap-3 px-3 py-2.5 transition-colors sm:px-4 ${
-        first ? "" : "border-t border-line"
-      } ${checked ? "bg-brand-tint" : "hover:bg-canvas"}`}
-    >
-      <Checkbox state={checked ? "checked" : "unchecked"} onToggle={onToggle} />
+    <div role="listitem" className={`${ROW} ${checked ? "bg-ice/60 hover:bg-ice" : "hover:bg-ice"}`}>
+      <Checkbox
+        state={checked ? "checked" : "unchecked"}
+        onToggle={onToggle}
+        label={`Select ${doc.filename}`}
+      />
       <button
         type="button"
         onClick={onToggle}
-        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        className="flex min-h-12 min-w-0 flex-1 items-center gap-3 py-2 text-left"
       >
         <File
           size={18}
           strokeWidth={1.75}
-          className={checked ? "shrink-0 text-brand" : "shrink-0 text-muted"}
+          className={checked ? "shrink-0 text-navy" : "shrink-0 text-tertiary"}
         />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
-          {doc.filename}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{doc.filename}</span>
+        {doc.size != null && (
+          <span className="hidden shrink-0 pr-7 font-mono text-xs text-secondary sm:block">
+            {formatBytes(doc.size)}
+          </span>
+        )}
       </button>
     </div>
   );
@@ -879,34 +851,29 @@ function FolderCard({
   const count = node.children.length;
   return (
     <div
-      className={`group relative rounded-md border transition-all ${
-        selected
-          ? "border-brand bg-brand-tint"
-          : "border-line bg-surface hover:border-brand-light/50 hover:shadow-sm"
+      className={`group relative rounded-panel border transition-colors duration-[180ms] ease-sh ${
+        selected ? "border-blue-soft bg-ice" : "border-line bg-paper hover:border-line-strong hover:bg-ice"
       }`}
     >
       <Checkbox
         state={state}
         onToggle={onToggle}
-        className={`absolute left-2.5 top-2.5 z-10 ${
-          selected ? "" : "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-        }`}
+        label={`Select ${node.name}`}
+        className="absolute right-4 top-4 z-10"
       />
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full flex-col items-start gap-3 p-4 text-left"
+        className="flex w-full flex-col items-start gap-4 rounded-panel p-4 text-left"
       >
         {selected ? (
-          <FolderOpen size={32} strokeWidth={1.5} className="text-brand" />
+          <FolderOpen size={28} strokeWidth={1.5} className="text-navy" />
         ) : (
-          <Folder size={32} strokeWidth={1.5} className="text-brand/80" />
+          <Folder size={28} strokeWidth={1.5} className="text-blue-soft" />
         )}
         <span className="w-full">
-          <span className="block truncate text-sm font-medium text-ink">
-            {node.name}
-          </span>
-          <span className="mt-0.5 block truncate text-xs font-light text-muted">
+          <span className="block truncate text-sm font-semibold text-ink">{node.name}</span>
+          <span className="mt-0.5 block truncate text-xs text-secondary">
             {subtitle ?? (count === 0 ? "No subfolders" : `${count} ${count === 1 ? "subfolder" : "subfolders"}`)}
           </span>
         </span>
@@ -924,27 +891,26 @@ function Breadcrumb({
   searching: boolean;
   onNavigate: (id: number | null) => void;
 }) {
+  const atRoot = crumbs.length === 0 && !searching;
+  const link =
+    "shrink-0 rounded-full py-2 font-medium text-secondary transition-colors duration-[120ms] ease-sh hover:text-navy";
   return (
     <nav
       aria-label="Folder path"
-      className="flex min-w-0 items-center gap-1 overflow-x-auto whitespace-nowrap text-sm"
+      className="flex min-w-0 items-center gap-1.5 overflow-x-auto overflow-y-hidden whitespace-nowrap py-1 text-sm"
     >
-      <button
-        type="button"
-        onClick={() => onNavigate(null)}
-        className={`shrink-0 transition-colors ${
-          crumbs.length === 0 && !searching
-            ? "font-semibold text-ink"
-            : "font-medium text-muted hover:text-ink"
-        }`}
-      >
-        All Folders
-      </button>
+      {atRoot ? (
+        <h1 className="shrink-0 text-xl text-ink">All Folders</h1>
+      ) : (
+        <button type="button" onClick={() => onNavigate(null)} className={link}>
+          All Folders
+        </button>
+      )}
 
       {searching && (
         <>
-          <ChevronRight size={14} className="shrink-0 text-muted/60" />
-          <span className="shrink-0 font-semibold text-ink">Search results</span>
+          <ChevronRight size={14} className="shrink-0 text-line-strong" />
+          <h1 className="shrink-0 text-xl text-ink">Search results</h1>
         </>
       )}
 
@@ -952,17 +918,15 @@ function Breadcrumb({
         crumbs.map((node, i) => {
           const isLast = i === crumbs.length - 1;
           return (
-            <span key={node.id} className="flex shrink-0 items-center gap-1">
-              <ChevronRight size={14} className="text-muted/60" />
+            <span key={node.id} className="flex shrink-0 items-center gap-1.5">
+              <ChevronRight size={14} className="text-line-strong" />
               {isLast ? (
-                <span className="max-w-[40vw] truncate font-semibold text-ink sm:max-w-xs">
-                  {node.name}
-                </span>
+                <h1 className="max-w-[46vw] truncate text-xl text-ink sm:max-w-sm">{node.name}</h1>
               ) : (
                 <button
                   type="button"
                   onClick={() => onNavigate(node.id)}
-                  className="max-w-[28vw] truncate font-medium text-muted transition-colors hover:text-ink sm:max-w-[12rem]"
+                  className={`${link} max-w-[28vw] truncate sm:max-w-[12rem]`}
                 >
                   {node.name}
                 </button>
@@ -990,9 +954,10 @@ function ViewToggle({
       type="button"
       onClick={onClick}
       aria-label={label}
+      title={label}
       aria-pressed={active}
-      className={`flex h-7 w-7 items-center justify-center rounded-[3px] transition-colors ${
-        active ? "bg-brand-tint text-brand" : "text-muted hover:text-ink"
+      className={`sh-hit-sm flex h-9 w-10 items-center justify-center rounded-full transition-colors duration-[180ms] ease-sh ${
+        active ? "bg-solid text-navy shadow-raised" : "text-secondary hover:text-ink"
       }`}
     >
       {children}
@@ -1011,29 +976,27 @@ function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
-      <div className="flex h-14 w-14 items-center justify-center rounded-md bg-canvas text-muted">
-        {searching ? <Search size={24} strokeWidth={1.5} /> : <FolderOpen size={26} strokeWidth={1.5} />}
-      </div>
+      <span className="flex h-14 w-14 items-center justify-center rounded-full bg-ice text-navy">
+        {searching ? <Search size={22} strokeWidth={1.75} /> : <FolderOpen size={24} strokeWidth={1.75} />}
+      </span>
       {searching ? (
         <>
-          <p className="mt-4 text-sm font-medium text-ink">No matching folders</p>
-          <p className="mt-1 max-w-sm text-sm font-light text-muted">
+          <p className="mt-5 text-lg font-semibold text-ink">No matching folders</p>
+          <p className="mt-1 max-w-sm text-sm text-secondary">
             No folders match &ldquo;{query.trim()}&rdquo;. Try a different term.
           </p>
         </>
       ) : !hasFolders ? (
         <>
-          <p className="mt-4 text-sm font-medium text-ink">No folders in this project</p>
-          <p className="mt-1 max-w-sm text-sm font-light text-muted">
+          <p className="mt-5 text-lg font-semibold text-ink">No folders in this project</p>
+          <p className="mt-1 max-w-sm text-sm text-secondary">
             All documents in the project will be included in the download.
           </p>
         </>
       ) : (
         <>
-          <p className="mt-4 text-sm font-medium text-ink">This folder is empty</p>
-          <p className="mt-1 max-w-sm text-sm font-light text-muted">
-            No documents or subfolders here.
-          </p>
+          <p className="mt-5 text-lg font-semibold text-ink">This folder is empty</p>
+          <p className="mt-1 max-w-sm text-sm text-secondary">No documents or subfolders here.</p>
         </>
       )}
     </div>
@@ -1063,10 +1026,10 @@ function SidebarItem({
 }) {
   return (
     <div
-      className={`group flex items-center rounded-sm transition-colors ${
-        active ? "bg-brand-tint" : "hover:bg-canvas"
+      className={`group flex items-center rounded-full transition-colors duration-[120ms] ease-sh ${
+        active ? "bg-solid shadow-raised" : "hover:bg-solid/70"
       }`}
-      style={{ paddingLeft: `${depth * 14}px` }}
+      style={{ marginLeft: `${depth * 14}px` }}
     >
       <button
         type="button"
@@ -1076,8 +1039,9 @@ function SidebarItem({
         }}
         tabIndex={hasChildren ? 0 : -1}
         aria-label={expanded ? "Collapse" : "Expand"}
-        className={`flex h-7 w-6 items-center justify-center text-muted ${
-          hasChildren ? "hover:text-ink" : "invisible"
+        aria-hidden={hasChildren ? undefined : true}
+        className={`flex h-10 w-8 shrink-0 items-center justify-center rounded-full text-secondary ${
+          hasChildren ? "hover:text-navy" : "invisible"
         }`}
       >
         {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
@@ -1085,18 +1049,13 @@ function SidebarItem({
       <button
         type="button"
         onClick={onClick}
-        className={`flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-left ${
-          active ? "text-brand" : "text-ink"
+        aria-current={active ? "page" : undefined}
+        className={`flex min-h-10 min-w-0 flex-1 items-center gap-2 rounded-full py-1.5 pr-4 text-left ${
+          active ? "text-navy" : "text-ink"
         }`}
       >
-        <span className={active ? "shrink-0 text-brand" : "shrink-0 text-brand/70"}>
-          {icon}
-        </span>
-        <span
-          className={`min-w-0 flex-1 truncate text-sm ${
-            active ? "font-semibold" : "font-normal"
-          }`}
-        >
+        <span className={active ? "shrink-0 text-navy" : "shrink-0 text-blue-soft"}>{icon}</span>
+        <span className={`min-w-0 flex-1 truncate text-sm ${active ? "font-semibold" : "font-medium"}`}>
           {label}
         </span>
       </button>

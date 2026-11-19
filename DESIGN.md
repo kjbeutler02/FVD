@@ -1,60 +1,114 @@
 # Design
 
-Visual system for the Strong & Hanni Project Documents portal. Derived from the firm Brand Guide (`002_BRAND_GUIDE.md`). Register: **product** — design serves the task. Strategy: **Restrained** — one brand color, tinted neutrals, color reserved for primary actions and current selection.
+Visual system for the Strong & Hanni Project Documents portal. It follows the
+**Strong & Hanni Design System**: calm, authoritative, paper-adjacent. One
+accent family (brand blue), restrained semantic colors, and a signature
+asymmetric surface curve. Think "quality legal paper," not "tech startup."
+
+Tokens live in `src/app/globals.css` as `--sh-*` custom properties and are
+exposed to Tailwind v4 through `@theme inline`. Shared components live in
+`src/components/ui.tsx`.
 
 ## Color
 
-Defined as hex CSS variables in `src/app/globals.css` and exposed to Tailwind v4 via `@theme inline`.
-
-| Token | Value | Role |
+| Tailwind name | Value | Role |
 | --- | --- | --- |
-| `--brand` | `#1E2A6B` | Brand deep blue. Header band, primary buttons, current selection, focus. |
-| `--brand-dark` | `#161F54` | Primary button / interactive hover. |
-| `--brand-light` | `#2A3A8A` | Focus ring, accent hovers. |
-| `--brand-tint` | `#EAECF4` | Selected row/card background (deep blue at low strength). |
-| `--ink` | `#0A0A0A` | Body text, headings. |
-| `--muted` | `#6B7280` | Captions, helper text, secondary labels. |
-| `--canvas` | `#F5F6F8` | App background / main content area. |
-| `--surface` | `#FFFFFF` | Sidebar, cards, panels, inputs, drawer. |
-| `--line` | `#E5E7EB` | Hairline borders, dividers. |
-| success `#15803D` / error `#B91C1C` | semantic states only. |
+| `navy` / `navy-deep` | `#1e2a6b` / `#151f57` | Authority: the one primary action in a view, the anchor surface. Hover/pressed. |
+| `blue` / `blue-soft` | `#4f63c4` / `#7080d0` | Interaction: focus rings, active marks, spinners. De-emphasized marks (folder glyphs). |
+| `ice` / `ice-deep` | `#eef1fb` / `#e4e9f8` | Inset fills, row hover, selected tint, progress track. |
+| `workspace` | `#edf2fc` | App background (level 0). |
+| `paper` | `#f8f9fc` | Quiet section fill (action bars, expanded lists, drop zone). |
+| `surface` / `surface-nav` / `solid` | white at 90% / 86% / 100% | Content surface, floating nav, opaque panels (drawer, inputs). |
+| `ink` / `secondary` / `tertiary` | `#171a26` / `#737c91` / `#7b849a` | Body and headings / metadata / uppercase labels. |
+| `line` / `line-strong` | `#dfe3ed` / `#ced5e4` | Hairlines / control borders. |
+| `success`, `info`, `warning`, `error` (+ `-bg`) | muted | **State only, never decoration.** |
 
-Two-layer neutral: white `--surface` sidebar/panels sit on the `--canvas` content area. Accent (`--brand`) is never decorative — primary action, current selection, and state only. Gray text only on white/canvas, never on the blue band (use white / white at reduced opacity there).
+At most two backgrounds per screen: workspace behind, translucent white for
+content. Navy appears as the anchor and the primary button only.
 
 ## Typography
 
-- **Montserrat** (`next/font/google`, weights 300–800), CSS var `--font-montserrat` → `--font-sans`. One family throughout (product register — no display/body pairing).
-- Fixed rem scale, ratio ~1.2: page title `text-xl`/`text-2xl` 600–700; section headings `text-base`/`text-lg` 600; body `text-sm` 400; captions/helper `text-xs` 300–400.
-- **Small labels / button text / eyebrows:** 500–600, `uppercase`, `tracking-wide`/`tracking-wider`. Used deliberately (sign-in label, "PROJECT" sidebar label, button text), not stamped on every section.
-- Wordmark lockup: `STRONG & HANNI` (bold, `tracking-[0.08em]`) over `LAW FIRM` (medium, `tracking-[0.32em]`), both uppercase. Reusable `<Wordmark>` component, `on-blue` (white) and `on-light` (blue/black) variants.
-- Headings use `text-wrap: balance`.
+- **Manrope** (400–800) for all UI, headings and body; **Source Serif 4** for
+  the one editorial moment (the sign-in tagline); **IBM Plex Mono** for
+  identifiers: the project number, archive names, file sizes, counts and
+  percentages. Loaded with `next/font/google`. These are placeholders until
+  licensed brand faces are supplied.
+- Body 15px / 1.6. Scale: `micro` 11, `xs` 13, `sm` 14, `base` 15, `lg` 17,
+  `xl` 19 (h3), `2xl` 24, `3xl` 32, `4xl` 40.
+- Headings: 600, 1.25, −0.012em. Sentence case, including buttons.
+- **Eyebrows** (`.sh-eyebrow` / `<Eyebrow>`): 11px, 600, uppercase, 0.08em,
+  tertiary color. Used for section labels and table headings.
+- Wordmark: `STRONG & HANNI` over `LAW FIRM`, set as type (`<Wordmark>`). No
+  logo file exists.
+
+## Shape and elevation
+
+- **Content surface** (`.sh-content-surface`): translucent white,
+  `border-radius: 18px 42px 18px 42px`, soft navy-tinted shadow, backdrop blur.
+  This curve is the brand's most distinctive mark.
+- **Anchor surface** (`.sh-anchor-surface`): navy, mirrored
+  `42px 18px 42px 18px`. Holds the current project.
+- **Floating nav** (`.sh-nav-surface`): translucent, 18px radius, 12px inside
+  the window edge.
+- Buttons, inputs, tabs, tags, tree rows: full pill. Insets and bands 14px,
+  panels 16px, checkbox 6px.
+- Surface levels: 0 workspace → 1 floating nav → 2 content surface → 3 navy
+  anchor → 4 inset status band.
 
 ## Layout
 
-- **App shell:** deep-blue top band (`--brand`) — wordmark left, account control (sign out) right — above a `--canvas` working area.
-- **Drive view:** white left sidebar (project meta + folder navigation tree, `lg:` and up) + main area (breadcrumb bar → toolbar with list/grid toggle + select-all + filter → folder grid/list → sticky selection/download bar). Sidebar collapses below `lg`; breadcrumb + up-button drive navigation on mobile.
-- **Entry / sign-in:** centered branded panel; sign-in is a split — deep-blue brand panel (stacked wordmark, tagline) + white form, stacking on mobile.
-- **Download:** right side **drawer** (slide-over) over a dimmed backdrop — not a modal-first reflex; mirrors a drive's transfer panel.
-- Radii: cards/panels `rounded-md`, buttons/inputs/checkbox `rounded-sm`. Shadows: `shadow-sm` ceiling. No glass, no gradients, no heavy shadow.
-- Content max width is generous (drive feel) but inputs/entry stay focused (`max-w-md`–`max-w-lg`).
+- **Shell:** floating nav (wordmark, "Project Documents", sign out) over the
+  workspace. Content is capped at 1180px.
+- **Sign-in:** the navy anchor (wordmark, serif tagline) beside one content
+  surface with the single Microsoft sign-in action.
+- **Project entry:** one centered content surface.
+- **Folder browser:** the navy anchor names the current project (number in
+  mono, folder count, "Open another project") above the folder tree, which
+  sits directly on the workspace. Everything else is **one** content surface:
+  path and tools, a borderless register listing (uppercase headings, hairline
+  rules, ice hover), and the selection/action bar. Big surface, not many
+  cards; the optional grid view uses quiet paper tiles.
+- **Transfers:** a drawer over a navy-tinted scrim, inset from the window
+  edge and carrying the content curve: header (eyebrow, title, mono metadata),
+  status, result band, grouped file list, footer actions.
+- Below `lg` the tree is hidden and the anchor becomes a strip; the breadcrumb
+  and up button drive navigation.
 
-## Components
+## Components (`src/components/ui.tsx`)
 
-Each interactive element ships default / hover / focus / active / disabled / selected; loading and error where they apply.
+- **Button** — pill; `primary` (navy), `secondary`, `ghost`, `tinted`,
+  `danger`; `sm` / `md` / `lg`. **One primary per view**: when a resume or
+  retry is offered, the other actions step down to secondary.
+- **IconButton** — circular, requires a `label` (accessible name and tooltip).
+- **Checkbox** — soft-square, navy fill, tri-state. Selecting a folder
+  includes everything beneath it.
+- **Switch** — pill toggle for "Convert documents to Markdown".
+- **StatusBand** — inset semantic band for results and warnings (download
+  finished, files missing, unidentified folders, cancel confirmation).
+- **Badge** — small uppercase state pill ("New folder", "Watching").
+- **ProgressBar**, **Spinner**, **Eyebrow**.
+- **Drawer**, **DrawerHeader**, **CancelConfirm**, **GroupListHeader** — the
+  shared frame of the download and upload panels.
 
-- **Buttons** — Primary: solid `--brand`, white, uppercase tracked, `rounded-sm`, hover `--brand-dark`, disabled 50%. Secondary: white, `--line` border, ink text. Ghost: transparent, hover canvas tint (toolbar/icon actions).
-- **Checkbox** — tri-state (checked / indeterminate / unchecked) `rounded-sm`; brand fill + white glyph when active; selecting a folder includes all descendants.
-- **Folder card (grid)** & **folder row (list)** — folder icon (brand), name, sub-count; checkbox to select, body click to open; selected = `--brand-tint` bg + brand border + checked.
-- **Breadcrumb** — clickable segments, `ChevronRight` separators, root = "All Folders".
-- **Sidebar tree** — indented expand/collapse nav; current folder highlighted with brand tint; navigation only (selection lives in the main area).
-- **Drawer** — phase-driven (scanning → review → downloading → zipping → complete / error). Review shows the full list grouped by folder with counts before anything is fetched; the primary "Save ZIP · N files" action opens the save-location picker. Downloading shows a brand progress bar, the files in flight, per-folder progress, and a "Not downloaded" section pinned to the top. Cancelling mid-transfer asks for confirmation inline.
-- **Upload drawer** — same slide-over as downloads, phase-driven (review → uploading → complete / error). Review holds a dashed drop zone ("Drop files or folders here", Choose files / Choose folder), a summary of what will be sent where, new Filevine folders that will be created, and duplicates already in the destination (skipped by default, with a checkbox to send them anyway). Files list grouped by destination folder with a per-file progress bar while sending. Failed files pin to the top; "Retry N failed files" on completion.
-- **Watch bar** — slim strip under the header (brand tint) while a local folder is being watched: folder → destination, live counts, Details / Stop. In neutral surface it offers "Resume watching" for a watch saved from a previous visit. Watching continues with the drawer closed.
-- **Drop target** — dragging files over the folder browser tints the area and shows a card naming the destination folder; dropping opens the upload review.
-- **States** — scan uses a spinner with live count; empty folder explains documents still download when selected; partial-failure download reports counts, lists the missing files, writes `_DOWNLOAD REPORT.txt` into the archive, and offers "Retry failed files" into a second ZIP; errors are branded, never dead ends.
+Every interactive element has default, hover, focus-visible (2px blue ring),
+disabled and, where relevant, selected states. Touch targets are at least
+44px: `md`/`lg` buttons outright, small controls through an extended hit area
+(`.sh-hit`, `.sh-hit-sm`). Selection is never conveyed by color alone
+(checkbox glyph plus tint).
 
 ## Motion
 
-- 150–250 ms, ease-out. Transitions convey state, not decoration; no orchestrated page-load sequence.
-- Drawer slides in from right; backdrop fades. List/grid selection and hover are quick tints.
-- `@media (prefers-reduced-motion: reduce)`: drawer + reveals become instant/crossfade.
+- Ease `cubic-bezier(0.2, 0.6, 0.2, 1)`; 120 / 180 / 280 ms. Transitions
+  convey state, never decoration.
+- The drawer eases in from the right and the scrim fades.
+- `prefers-reduced-motion: reduce` makes all of it instant.
+
+## Known substitutions and limits
+
+- Fonts are Google Fonts placeholders; icons are Lucide placeholders; the
+  wordmark is type.
+- The design system's `secondary` (`#737c91`) and `tertiary` (`#7b849a`) text
+  colors measure about 4.2:1 and 3.7:1 on white, under WCAG AA's 4.5:1 for
+  small text. They are used here for metadata and labels only; anything a
+  person must read to act (consequences, errors, counts of missing files) is
+  set in ink.

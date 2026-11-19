@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   XCircle,
-  Loader2,
   Clock,
   FileArchive,
   AlertTriangle,
@@ -18,6 +17,18 @@ import {
   FolderDown,
   Play,
 } from "lucide-react";
+import {
+  Button,
+  CancelConfirm,
+  Drawer,
+  DrawerHeader,
+  Eyebrow,
+  GroupListHeader,
+  IconButton,
+  ProgressBar,
+  Spinner,
+  StatusBand,
+} from "@/components/ui";
 import {
   PART_MAX_FILES,
   REPORT_FILENAME,
@@ -43,12 +54,12 @@ interface Props {
 
 const PHASE_TITLES: Record<DownloadPhase, string> = {
   idle: "",
-  scanning: "Preparing Download",
-  review: "Review Download",
-  downloading: "Downloading Files",
-  zipping: "Creating ZIP Archive",
-  complete: "Download Complete",
-  error: "Download Failed",
+  scanning: "Preparing download",
+  review: "Review download",
+  downloading: "Downloading files",
+  zipping: "Creating ZIP archive",
+  complete: "Download complete",
+  error: "Download failed",
 };
 
 // Folder groups start expanded for small runs and collapsed for large ones,
@@ -179,198 +190,174 @@ export default function ProgressPanel({
   };
 
   const completeTitle =
-    phase === "complete" && failedFiles > 0 ? "Completed with Errors" : PHASE_TITLES[phase];
+    phase === "complete" && failedFiles > 0 ? "Completed with errors" : PHASE_TITLES[phase];
+
+  const meta =
+    zipName && phase !== "scanning"
+      ? `${isRetry ? "Retry archive · " : ""}${
+          isSplit
+            ? isTransferring && activePart
+              ? `Part ${activePart.index} of ${parts.length} · ${activePart.zipName}`
+              : `${plural(parts.length, "ZIP file")}${saveFolder ? ` in "${saveFolder}"` : ""}`
+            : zipName
+        }`
+      : undefined;
+
+  // One primary action per view: "New project" steps back when a resume or
+  // retry is the thing to do next.
+  const offersResume = phase === "error" && canResume;
+  const offersRetry = phase === "complete" && failedFiles > 0;
 
   return (
-    <div
-      className="fixed inset-0 flex justify-end"
-      style={{ zIndex: "var(--z-drawer)" }}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Download progress"
-    >
-      <button
-        type="button"
-        aria-label="Close"
-        tabIndex={isDone ? 0 : -1}
-        onClick={isDone ? onClose : undefined}
-        className="sh-backdrop absolute inset-0 bg-ink/40"
-        style={{ cursor: isDone ? "pointer" : "default" }}
-      />
-
-      <div className="sh-drawer relative flex h-full w-full max-w-lg flex-col bg-surface shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-line px-5 py-4">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <PhaseGlyph phase={phase} failed={failedFiles > 0} />
-            <div className="min-w-0">
-              <h2 className="truncate text-base font-semibold text-ink">{completeTitle}</h2>
-              {zipName && phase !== "scanning" && (
-                <p className="truncate text-xs font-light text-muted">
-                  {isRetry ? "Retry archive · " : ""}
-                  {isSplit
-                    ? isTransferring && activePart
-                      ? `Part ${activePart.index} of ${parts.length} · ${activePart.zipName}`
-                      : `${plural(parts.length, "ZIP file")}${saveFolder ? ` in "${saveFolder}"` : ""}`
-                    : zipName}
-                </p>
-              )}
-            </div>
-          </div>
-          <button
-            type="button"
+    <Drawer label="Download progress" dismissable={isDone} onDismiss={onClose}>
+      <DrawerHeader
+        glyph={<PhaseGlyph phase={phase} failed={failedFiles > 0} />}
+        eyebrow={isRetry ? "Retry download" : "Download"}
+        title={completeTitle}
+        meta={meta}
+        action={
+          <IconButton
+            label={isActive ? "Cancel download" : "Close"}
             onClick={isActive || phase === "review" ? requestCancel : onClose}
-            aria-label={isActive ? "Cancel download" : "Close"}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted transition-colors hover:bg-canvas hover:text-ink"
           >
             <X size={18} />
-          </button>
-        </div>
+          </IconButton>
+        }
+      />
 
-        {/* Status block */}
-        <div className="border-b border-line px-5 py-4">
-          {phase === "scanning" ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-sm text-muted">
-                <Loader2 size={16} className="animate-spin text-brand" />
-                <span>
-                  {scanFoldersTotal != null
-                    ? "Finding documents in your selected folders…"
-                    : "Scanning the project for documents…"}
-                </span>
-              </div>
-              {scanFoldersTotal != null ? (
-                <p className="pl-6 text-xs font-light text-muted">
-                  {Math.min(scanFoldersDone ?? 0, scanFoldersTotal).toLocaleString()} of{" "}
-                  {plural(scanFoldersTotal, "folder")} searched
-                  {scanProgress ? ` · ${plural(scanProgress, "document")} found` : ""}
-                </p>
-              ) : (
-                scanTotal != null &&
-                scanTotal > 0 && (
-                  <p className="pl-6 text-xs font-light text-muted">
-                    {plural(scanTotal, "document")} checked
-                    {scanProgress != null && scanProgress !== scanTotal
-                      ? ` · ${scanProgress.toLocaleString()} match your selection`
-                      : ""}
-                  </p>
-                )
-              )}
-              {resolvingFolders && (
-                <p className="pl-6 text-xs font-light text-muted">
-                  Looking up {plural(resolvingFolders.total, "folder")} not in the project&apos;s
-                  folder list… {Math.min(resolvingFolders.done, resolvingFolders.total)} of{" "}
-                  {resolvingFolders.total}
-                </p>
-              )}
-              <p className="pl-6 text-xs font-light text-muted">
-                Nothing is downloaded yet — you will review the list first.
+      {/* Status block */}
+      <div className="px-7 pb-5">
+        {phase === "scanning" ? (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2.5 text-sm font-medium text-ink">
+              <Spinner size={16} />
+              <span>
+                {scanFoldersTotal != null
+                  ? "Finding documents in your selected folders…"
+                  : "Scanning the project for documents…"}
+              </span>
+            </div>
+            {scanFoldersTotal != null ? (
+              <p className="pl-[26px] text-xs text-secondary">
+                {Math.min(scanFoldersDone ?? 0, scanFoldersTotal).toLocaleString()} of{" "}
+                {plural(scanFoldersTotal, "folder")} searched
+                {scanProgress ? ` · ${plural(scanProgress, "document")} found` : ""}
               </p>
-            </div>
-          ) : phase === "review" ? (
-            <ReviewSummary
-              totalFiles={totalFiles}
-              folderCount={groups.length}
-              partCount={parts.length}
-              unknownFolderDocs={unknownFolderDocs}
-              excludedCount={excludedCount}
-              convertToMd={convertToMd}
-              convertibleTotal={convertibleTotal}
-            />
-          ) : phase === "error" && totalFiles === 0 ? (
-            <p className="text-sm text-muted">The document list could not be prepared.</p>
-          ) : (
-            <>
-              <div className="mb-2 h-2 w-full overflow-hidden rounded-full bg-canvas">
-                <div
-                  className={`h-full rounded-full transition-all duration-300 ${
-                    phase === "error"
-                      ? "bg-error"
-                      : phase === "complete" && failedFiles === 0
-                      ? "bg-success"
-                      : "bg-brand"
-                  }`}
-                  style={{ width: phase === "zipping" ? "100%" : `${percent}%` }}
-                />
-              </div>
-              <div className="flex items-center justify-between text-sm text-muted">
-                <span>
-                  {phase === "zipping"
-                    ? "Generating ZIP archive…"
-                    : `${completedFiles.toLocaleString()} of ${plural(totalFiles, "file")} saved`}
-                </span>
-                <span className="flex items-center gap-3">
-                  {failedFiles > 0 && (
-                    <span className="flex items-center gap-1 text-error">
-                      <AlertTriangle size={14} />
-                      {failedFiles.toLocaleString()} failed
-                    </span>
-                  )}
-                  {phase === "downloading" && (
-                    <span className="font-medium text-ink">{percent}%</span>
-                  )}
-                </span>
-              </div>
-              {isTransferring && isSplit && activePart && (
-                <p className="mt-2 truncate text-xs font-light text-muted">
-                  <span className="font-medium text-ink">
-                    Part {activePart.index} of {parts.length}:{" "}
-                  </span>
-                  {activePart.zipName} · {plural(activePart.fileCount, "file")}
-                  {savedParts > 0 && ` · ${savedParts} saved`}
+            ) : (
+              scanTotal != null &&
+              scanTotal > 0 && (
+                <p className="pl-[26px] text-xs text-secondary">
+                  {plural(scanTotal, "document")} checked
+                  {scanProgress != null && scanProgress !== scanTotal
+                    ? ` · ${scanProgress.toLocaleString()} match your selection`
+                    : ""}
                 </p>
-              )}
-              {phase === "downloading" && activeFiles.length > 0 && (
-                <p className="mt-2 truncate text-xs font-light text-muted">
-                  <span className="font-medium text-ink">Now: </span>
-                  {activeFiles.join(" · ")}
-                </p>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Cancel confirmation */}
-        {confirmingCancel && (
-          <div className="border-b border-line bg-canvas px-5 py-3">
-            <p className="text-sm text-ink">
-              {isSplit
-                ? `Cancel this download? ${
-                    savedParts > 0
-                      ? `The ${plural(savedParts, "part")} already saved will stay on disk; the part in progress`
-                      : "The part in progress"
-                  } will be discarded.`
-                : "Cancel this download? The partial ZIP will be discarded."}
+              )
+            )}
+            {resolvingFolders && (
+              <p className="pl-[26px] text-xs text-secondary">
+                Looking up {plural(resolvingFolders.total, "folder")} not in the project&apos;s
+                folder list… {Math.min(resolvingFolders.done, resolvingFolders.total)} of{" "}
+                {resolvingFolders.total}
+              </p>
+            )}
+            <p className="pl-[26px] text-xs text-secondary">
+              Nothing is downloaded yet — you will review the list first.
             </p>
-            <div className="mt-2.5 flex gap-2">
-              <button
-                type="button"
-                autoFocus
-                onClick={() => setCancelRequested(false)}
-                className="rounded-sm border border-line bg-surface px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-ink transition-colors hover:bg-canvas"
-              >
-                Keep downloading
-              </button>
-              <button
-                type="button"
-                onClick={onCancel}
-                className="rounded-sm bg-error px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white transition-colors hover:opacity-90"
-              >
-                Cancel download
-              </button>
-            </div>
           </div>
+        ) : phase === "review" ? (
+          <ReviewSummary
+            totalFiles={totalFiles}
+            folderCount={groups.length}
+            partCount={parts.length}
+            unknownFolderDocs={unknownFolderDocs}
+            excludedCount={excludedCount}
+            convertToMd={convertToMd}
+            convertibleTotal={convertibleTotal}
+          />
+        ) : phase === "error" && totalFiles === 0 ? (
+          <p className="text-sm text-secondary">The document list could not be prepared.</p>
+        ) : (
+          <>
+            <ProgressBar
+              percent={phase === "zipping" ? 100 : percent}
+              tone={
+                phase === "error"
+                  ? "error"
+                  : phase === "complete" && failedFiles === 0
+                  ? "success"
+                  : "brand"
+              }
+            />
+            <div className="mt-2.5 flex items-center justify-between gap-3 text-sm text-secondary">
+              <span>
+                {phase === "zipping"
+                  ? "Generating ZIP archive…"
+                  : `${completedFiles.toLocaleString()} of ${plural(totalFiles, "file")} saved`}
+              </span>
+              <span className="flex items-center gap-3">
+                {failedFiles > 0 && (
+                  <span className="flex items-center gap-1 font-medium text-error">
+                    <AlertTriangle size={14} />
+                    {failedFiles.toLocaleString()} failed
+                  </span>
+                )}
+                {phase === "downloading" && (
+                  <span className="font-mono font-medium text-ink">{percent}%</span>
+                )}
+              </span>
+            </div>
+            {isTransferring && isSplit && activePart && (
+              <p className="mt-2 truncate text-xs text-secondary">
+                <span className="font-semibold text-ink">
+                  Part {activePart.index} of {parts.length}:{" "}
+                </span>
+                <span className="font-mono">{activePart.zipName}</span> ·{" "}
+                {plural(activePart.fileCount, "file")}
+                {savedParts > 0 && ` · ${savedParts} saved`}
+              </p>
+            )}
+            {phase === "downloading" && activeFiles.length > 0 && (
+              <p className="mt-2 truncate text-xs text-secondary">
+                <span className="font-semibold text-ink">Now: </span>
+                {activeFiles.join(" · ")}
+              </p>
+            )}
+          </>
         )}
+      </div>
 
-        {/* Result banners */}
-        {phase === "error" && errorMessage && (
-          <div className="border-b border-error/20 bg-error/5 px-5 py-3">
-            <p className="text-sm text-error">
-              {isSplit && activePart ? `Part ${activePart.index} of ${parts.length} failed: ` : ""}
-              {errorMessage}
-            </p>
+      {/* Cancel confirmation */}
+      {confirmingCancel && (
+        <CancelConfirm
+          message={
+            isSplit
+              ? `Cancel this download? ${
+                  savedParts > 0
+                    ? `The ${plural(savedParts, "part")} already saved will stay on disk; the part in progress`
+                    : "The part in progress"
+                } will be discarded.`
+              : "Cancel this download? The partial ZIP will be discarded."
+          }
+          keepLabel="Keep downloading"
+          cancelLabel="Cancel download"
+          onKeep={() => setCancelRequested(false)}
+          onCancel={onCancel}
+        />
+      )}
+
+      {/* Result bands */}
+      {phase === "error" && errorMessage && (
+        <div className="px-7 pb-4">
+          <StatusBand
+            tone="error"
+            icon={<XCircle size={17} />}
+            title={`${
+              isSplit && activePart ? `Part ${activePart.index} of ${parts.length} failed: ` : ""
+            }${errorMessage}`}
+          >
             {canResume ? (
-              <p className="mt-1 text-xs font-light text-muted">
+              <p className="mt-1 text-xs text-ink">
                 {savedParts > 0
                   ? `${plural(savedParts, "part")} (${plural(
                       parts
@@ -386,21 +373,20 @@ export default function ProgressPanel({
               </p>
             ) : (
               settled > 0 && (
-                <p className="mt-1 text-xs font-light text-muted">
+                <p className="mt-1 text-xs text-ink">
                   {completedFiles.toLocaleString()} of {totalFiles.toLocaleString()} files had
                   been fetched before the failure. Nothing was saved.
                 </p>
               )
             )}
-          </div>
-        )}
-        {phase === "complete" && (
-          <div
-            className={`border-b px-5 py-3 text-sm ${
-              failedFiles > 0
-                ? "border-error/20 bg-error/5 text-ink"
-                : "border-success/20 bg-success/5 text-success"
-            }`}
+          </StatusBand>
+        </div>
+      )}
+      {phase === "complete" && (
+        <div className="px-7 pb-4">
+          <StatusBand
+            tone={failedFiles > 0 ? "error" : "success"}
+            icon={failedFiles > 0 ? <AlertTriangle size={17} /> : <CheckCircle2 size={17} />}
           >
             <p>
               Saved {plural(completedFiles, "file")}
@@ -415,7 +401,7 @@ export default function ProgressPanel({
               {failedFiles > 0 && (
                 <>
                   {" "}
-                  <span className="text-error">
+                  <span className="font-semibold text-error">
                     {plural(failedFiles, "file")} could not be downloaded
                   </span>{" "}
                   and {failedFiles === 1 ? "is" : "are"} missing from the archive.
@@ -423,7 +409,7 @@ export default function ProgressPanel({
               )}
             </p>
             {(convertToMd || reportIncluded) && (
-              <p className="mt-1 text-xs font-light text-muted">
+              <p className="mt-1 text-xs text-ink">
                 {convertToMd &&
                   `${plural(converted, "document")} converted to Markdown` +
                     (keptOriginal > 0
@@ -439,163 +425,119 @@ export default function ProgressPanel({
                   ` A summary of all parts is saved as "${RUN_REPORT_FILENAME}" next to them.`}
               </p>
             )}
+          </StatusBand>
+        </div>
+      )}
+
+      {/* File list */}
+      <div className="min-h-0 flex-1 overflow-y-auto border-t border-line">
+        {phase === "scanning" ? (
+          <div className="px-7 py-10 text-center text-sm text-secondary">
+            Building the document list…
+          </div>
+        ) : (
+          <>
+            {isSplit && <PartsSection parts={parts} phase={phase} />}
+
+            {failures.length > 0 && (
+              <section aria-label="Failed files" className="border-b border-line">
+                <h3 className="flex items-center gap-2 bg-error-bg px-7 py-2.5 text-micro font-semibold uppercase tracking-label text-error">
+                  <AlertTriangle size={13} />
+                  Not downloaded ({failures.length.toLocaleString()})
+                </h3>
+                <ul className="divide-y divide-line">
+                  {failures.slice(0, ROW_LIMIT).map((file) => (
+                    <FileRow key={file.documentId} file={file} showFolder convertToMd={convertToMd} />
+                  ))}
+                  {failures.length > ROW_LIMIT && (
+                    <li className="px-7 py-2.5 text-xs text-secondary">
+                      …and {(failures.length - ROW_LIMIT).toLocaleString()} more; see the report in the archive.
+                    </li>
+                  )}
+                </ul>
+              </section>
+            )}
+
+            {groups.length > 1 && (
+              <GroupListHeader
+                label={plural(groups.length, "folder")}
+                onExpandAll={() => setAll(true)}
+                onCollapseAll={() => setAll(false)}
+              />
+            )}
+
+            <ul className={groups.length > 1 ? "border-t border-line" : ""}>
+              {groups.map((group) => (
+                <FolderGroupRow
+                  key={group.path || " root"}
+                  group={group}
+                  phase={phase}
+                  convertToMd={convertToMd}
+                  expanded={isExpanded(group.path)}
+                  onToggle={() => toggleGroup(group.path)}
+                />
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="border-t border-line bg-paper px-7 py-5">
+        {phase === "review" ? (
+          <div className="flex gap-3">
+            <Button variant="secondary" className="flex-1" onClick={onCancel}>
+              Back
+            </Button>
+            <Button
+              className="flex-[2]"
+              onClick={onConfirm}
+              autoFocus
+              icon={isSplit ? <FolderDown size={16} /> : <FileArchive size={16} />}
+            >
+              {isSplit
+                ? `Choose folder · ${plural(parts.length, "ZIP file")}`
+                : `Save ZIP · ${plural(totalFiles, "file")}`}
+            </Button>
+          </div>
+        ) : isActive ? (
+          <Button variant="secondary" fullWidth onClick={requestCancel} disabled={confirmingCancel}>
+            Cancel download
+          </Button>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {offersResume && (
+              <Button fullWidth onClick={onResume} autoFocus icon={<Play size={16} />}>
+                Resume from part {activePart?.index ?? currentPart} of {parts.length}
+              </Button>
+            )}
+            {offersRetry && (
+              <Button fullWidth onClick={onRetryFailed} icon={<RotateCcw size={16} />}>
+                Retry {plural(failedFiles, "failed file")} into a second ZIP
+              </Button>
+            )}
+            <div className="flex gap-3">
+              <Button variant="secondary" className="flex-1" onClick={onClose}>
+                Back to project
+              </Button>
+              <Button
+                variant={offersResume || offersRetry ? "secondary" : "primary"}
+                className="flex-1"
+                onClick={onNewProject}
+              >
+                New project
+              </Button>
+            </div>
           </div>
         )}
-
-        {/* File list */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {phase === "scanning" ? (
-            <div className="px-5 py-8 text-center text-sm font-light text-muted">
-              Building the document list…
-            </div>
-          ) : (
-            <>
-              {isSplit && <PartsSection parts={parts} phase={phase} />}
-
-              {failures.length > 0 && (
-                <section aria-label="Failed files" className="border-b border-line">
-                  <h3 className="flex items-center gap-2 bg-error/5 px-5 py-2 text-xs font-semibold uppercase tracking-wider text-error">
-                    <AlertTriangle size={13} />
-                    Not downloaded ({failures.length.toLocaleString()})
-                  </h3>
-                  <ul className="divide-y divide-line">
-                    {failures.slice(0, ROW_LIMIT).map((file) => (
-                      <FileRow key={file.documentId} file={file} showFolder convertToMd={convertToMd} />
-                    ))}
-                    {failures.length > ROW_LIMIT && (
-                      <li className="px-5 py-2 text-xs font-light text-muted">
-                        …and {(failures.length - ROW_LIMIT).toLocaleString()} more; see the report in the archive.
-                      </li>
-                    )}
-                  </ul>
-                </section>
-              )}
-
-              {groups.length > 1 && (
-                <div className="flex items-center justify-between px-5 py-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted">
-                    {plural(groups.length, "folder")}
-                  </p>
-                  <div className="flex items-center gap-3 text-xs font-medium uppercase tracking-wider">
-                    <button
-                      type="button"
-                      onClick={() => setAll(true)}
-                      className="text-brand transition-colors hover:text-brand-dark"
-                    >
-                      Expand all
-                    </button>
-                    <span className="h-3 w-px bg-line" />
-                    <button
-                      type="button"
-                      onClick={() => setAll(false)}
-                      className="text-brand transition-colors hover:text-brand-dark"
-                    >
-                      Collapse all
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <ul className={groups.length > 1 ? "border-t border-line" : ""}>
-                {groups.map((group) => (
-                  <FolderGroupRow
-                    key={group.path || " root"}
-                    group={group}
-                    phase={phase}
-                    convertToMd={convertToMd}
-                    expanded={isExpanded(group.path)}
-                    onToggle={() => toggleGroup(group.path)}
-                  />
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="border-t border-line px-5 py-4">
-          {phase === "review" ? (
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="flex flex-1 items-center justify-center rounded-sm border border-line px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-ink transition-colors hover:bg-canvas"
-              >
-                Back
-              </button>
-              <button
-                type="button"
-                onClick={onConfirm}
-                autoFocus
-                className="flex flex-[2] items-center justify-center gap-2 rounded-sm bg-brand px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark"
-              >
-                {isSplit ? <FolderDown size={16} /> : <FileArchive size={16} />}
-                {isSplit
-                  ? `Choose folder · ${plural(parts.length, "ZIP file")}`
-                  : `Save ZIP · ${plural(totalFiles, "file")}`}
-              </button>
-            </div>
-          ) : isActive ? (
-            <button
-              type="button"
-              onClick={requestCancel}
-              disabled={confirmingCancel}
-              className="flex w-full items-center justify-center gap-2 rounded-sm border border-line px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-ink transition-colors hover:bg-canvas disabled:opacity-50"
-            >
-              Cancel Download
-            </button>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {phase === "error" && canResume && (
-                <button
-                  type="button"
-                  onClick={onResume}
-                  autoFocus
-                  className="flex w-full items-center justify-center gap-2 rounded-sm bg-brand px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark"
-                >
-                  <Play size={16} />
-                  Resume from part {activePart?.index ?? currentPart} of {parts.length}
-                </button>
-              )}
-              {phase === "complete" && failedFiles > 0 && (
-                <button
-                  type="button"
-                  onClick={onRetryFailed}
-                  className="flex w-full items-center justify-center gap-2 rounded-sm bg-brand px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark"
-                >
-                  <RotateCcw size={16} />
-                  Retry {plural(failedFiles, "failed file")} into a second ZIP
-                </button>
-              )}
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="flex flex-1 items-center justify-center rounded-sm border border-line px-4 py-2.5 text-sm font-semibold uppercase tracking-wider text-ink transition-colors hover:bg-canvas"
-                >
-                  Back to Project
-                </button>
-                <button
-                  type="button"
-                  onClick={onNewProject}
-                  className={`flex flex-1 items-center justify-center rounded-sm px-4 py-2.5 text-sm font-semibold uppercase tracking-wider transition-colors ${
-                    phase === "complete" && failedFiles > 0
-                      ? "border border-line text-ink hover:bg-canvas"
-                      : "bg-brand text-white hover:bg-brand-dark"
-                  }`}
-                >
-                  New Project
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
       </div>
-    </div>
+    </Drawer>
   );
 }
 
 /* ---------------------------------------------------------------- pieces */
+
+const CODE = "rounded-check bg-ice px-1.5 py-px font-mono text-[0.75rem] text-ink";
 
 function ReviewSummary({
   totalFiles,
@@ -615,25 +557,22 @@ function ReviewSummary({
   convertibleTotal: number;
 }) {
   return (
-    <div className="space-y-2">
-      <div className="flex items-start gap-2.5">
-        <ListChecks size={18} className="mt-0.5 shrink-0 text-brand" />
-        <div>
-          <p className="text-sm font-medium text-ink">
-            {plural(totalFiles, "document")} in {plural(folderCount, "folder")} will be
-            downloaded.
-          </p>
-          <p className="mt-0.5 text-xs font-light text-muted">
-            {partCount > 1
-              ? "Check the list below, then choose a folder to save into. Nothing is fetched until you confirm."
-              : "Check the list below, then choose where to save the ZIP. Nothing is fetched until you confirm."}
-          </p>
-        </div>
+    <div className="space-y-3">
+      <div>
+        <p className="text-base font-semibold text-ink">
+          {plural(totalFiles, "document")} in {plural(folderCount, "folder")} will be
+          downloaded.
+        </p>
+        <p className="mt-1 text-sm text-secondary">
+          {partCount > 1
+            ? "Check the list below, then choose a folder to save into. Nothing is fetched until you confirm."
+            : "Check the list below, then choose where to save the ZIP. Nothing is fetched until you confirm."}
+        </p>
       </div>
-      <ul className="space-y-1 pl-7 text-xs font-light text-muted">
+      <ul className="space-y-1.5 text-sm text-secondary">
         {partCount > 1 && (
           <li>
-            <span className="font-medium text-ink">Large download:</span> it will be split
+            <span className="font-semibold text-ink">Large download:</span> it will be split
             into {plural(partCount, "ZIP file")} of up to {PART_MAX_FILES.toLocaleString()}{" "}
             files each, saved into the folder you choose. Each part is safely on disk before
             the next begins, and a failed part can be resumed without redoing the others.
@@ -641,10 +580,10 @@ function ReviewSummary({
         )}
         {convertToMd ? (
           <li>
-            <span className="font-medium text-ink">Markdown conversion is on:</span>{" "}
+            <span className="font-semibold text-ink">Markdown conversion is on:</span>{" "}
             {plural(convertibleTotal, "document")} (PDF, Word, text, CSV, …) will be saved as{" "}
-            <code className="rounded-sm bg-canvas px-1 font-mono text-[0.7rem]">.md</code>{" "}
-            instead of the original file. Files with no extractable text keep the original.
+            <code className={CODE}>.md</code> instead of the original file. Files with no
+            extractable text keep the original.
           </li>
         ) : (
           <li>Files are saved in their original formats, in their Filevine folders.</li>
@@ -655,21 +594,22 @@ function ReviewSummary({
             {excludedCount === 1 ? "is" : "are"} not included.
           </li>
         )}
-        {unknownFolderDocs > 0 && (
-          <li className="text-error">
-            <span className="font-medium">
-              {plural(unknownFolderDocs, "document")} {unknownFolderDocs === 1 ? "is" : "are"} in
-              folders Filevine could not identify.
-            </span>{" "}
-            {unknownFolderDocs === 1 ? "It" : "They"} will be saved under{" "}
-            <code className="rounded-sm bg-canvas px-1 font-mono text-[0.7rem]">
-              {UNKNOWN_FOLDER_PREFIX} &lt;id&gt;
-            </code>{" "}
-            at the top of the archive so {unknownFolderDocs === 1 ? "it stays" : "they stay"}{" "}
-            traceable.
-          </li>
-        )}
       </ul>
+      {unknownFolderDocs > 0 && (
+        <StatusBand
+          tone="warning"
+          icon={<AlertTriangle size={16} />}
+          title={`${plural(unknownFolderDocs, "document")} ${
+            unknownFolderDocs === 1 ? "is" : "are"
+          } in folders Filevine could not identify.`}
+        >
+          <p className="mt-1 text-xs text-ink">
+            {unknownFolderDocs === 1 ? "It" : "They"} will be saved under{" "}
+            <code className={CODE}>{UNKNOWN_FOLDER_PREFIX} &lt;id&gt;</code> at the top of the
+            archive so {unknownFolderDocs === 1 ? "it stays" : "they stay"} traceable.
+          </p>
+        </StatusBand>
+      )}
     </div>
   );
 }
@@ -678,24 +618,24 @@ function PartsSection({ parts, phase }: { parts: PartProgress[]; phase: Download
   const saved = parts.filter((p) => p.status === "complete").length;
   return (
     <section aria-label="ZIP files" className="border-b border-line">
-      <h3 className="flex items-center justify-between px-5 py-2 text-xs font-semibold uppercase tracking-wider text-muted">
-        <span className="flex items-center gap-2">
+      <h3 className="flex items-center justify-between gap-3 px-7 pb-2 pt-4">
+        <Eyebrow as="span" className="flex items-center gap-2">
           <FileArchive size={13} />
           {plural(parts.length, "ZIP file")}
-        </span>
+        </Eyebrow>
         {phase !== "review" && (
-          <span className="font-light normal-case tracking-normal">
+          <span className="font-mono text-xs font-normal text-secondary">
             {saved} of {parts.length} saved
           </span>
         )}
       </h3>
-      <ul className="divide-y divide-line border-t border-line bg-canvas/40">
+      <ul className="divide-y divide-line border-t border-line">
         {parts.map((part) => (
-          <li key={part.index} className="flex items-center gap-3 py-2 pl-5 pr-5">
+          <li key={part.index} className="flex min-h-12 items-center gap-3 px-7 py-2">
             <PartStatusIcon status={part.status} phase={phase} />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-ink">{part.zipName}</p>
-              <p className="truncate text-xs font-light text-muted">
+              <p className="truncate font-mono text-xs text-ink">{part.zipName}</p>
+              <p className="truncate text-xs text-secondary">
                 {plural(part.fileCount, "file")}
                 {part.status === "writing" && " · writing…"}
                 {part.status === "complete" && " · saved"}
@@ -718,12 +658,12 @@ function PartStatusIcon({ status, phase }: { status: PartProgress["status"]; pha
     case "error":
       return <XCircle size={15} className="shrink-0 text-error" />;
     case "writing":
-      return <Loader2 size={15} className="shrink-0 animate-spin text-brand" />;
+      return <Spinner size={15} />;
     case "pending":
       return phase === "review" ? (
-        <FileArchive size={15} className="shrink-0 text-brand" />
+        <FileArchive size={15} className="shrink-0 text-navy" />
       ) : (
-        <Clock size={15} className="shrink-0 text-muted/40" />
+        <Clock size={15} className="shrink-0 text-line-strong" />
       );
   }
 }
@@ -753,7 +693,7 @@ function FolderGroupRow({
       <>
         {plural(total, "file")}
         {convertToMd && group.convertible > 0 && (
-          <span className="text-muted"> · {group.convertible.toLocaleString()} → .md</span>
+          <span> · {group.convertible.toLocaleString()} → .md</span>
         )}
       </>
     );
@@ -770,13 +710,13 @@ function FolderGroupRow({
 
   const groupIcon =
     inProgress && group.active > 0 ? (
-      <Loader2 size={15} className="shrink-0 animate-spin text-brand" />
+      <Spinner size={15} />
     ) : group.failed > 0 && settled === total ? (
       <AlertTriangle size={15} className="shrink-0 text-error" />
     ) : settled === total && total > 0 && phase !== "review" ? (
       <CheckCircle2 size={15} className="shrink-0 text-success" />
     ) : (
-      <Folder size={15} className="shrink-0 text-brand" />
+      <Folder size={15} className="shrink-0 text-blue-soft" />
     );
 
   return (
@@ -785,41 +725,34 @@ function FolderGroupRow({
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex w-full items-center gap-2 px-5 py-2.5 text-left transition-colors hover:bg-canvas"
+        className="flex min-h-12 w-full items-center gap-2.5 px-7 py-2 text-left transition-colors duration-[120ms] ease-sh hover:bg-ice"
       >
         {expanded ? (
-          <ChevronDown size={14} className="shrink-0 text-muted" />
+          <ChevronDown size={14} className="shrink-0 text-secondary" />
         ) : (
-          <ChevronRight size={14} className="shrink-0 text-muted" />
+          <ChevronRight size={14} className="shrink-0 text-secondary" />
         )}
         {groupIcon}
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
-          {group.path || <span className="italic text-muted">Project root (no folder)</span>}
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">
+          {group.path || <span className="font-medium italic text-secondary">Project root (no folder)</span>}
         </span>
-        <span className="shrink-0 text-xs font-light text-muted">{summary}</span>
+        <span className="shrink-0 font-mono text-xs text-secondary">{summary}</span>
       </button>
       {inProgress && (
-        <div className="mx-5 -mt-1 mb-2 h-1 overflow-hidden rounded-full bg-canvas">
-          <div
-            className="h-full rounded-full bg-brand transition-all duration-300"
-            style={{ width: `${total > 0 ? Math.round((settled / total) * 100) : 0}%` }}
-          />
+        <div className="-mt-0.5 px-7 pb-2.5">
+          <ProgressBar size="sm" percent={total > 0 ? Math.round((settled / total) * 100) : 0} />
         </div>
       )}
       {expanded && (
-        <ul className="divide-y divide-line border-t border-line bg-canvas/40">
+        <ul className="divide-y divide-line border-t border-line bg-paper">
           {rows.map((file) => (
             <FileRow key={file.documentId} file={file} convertToMd={convertToMd} />
           ))}
           {!showAll && total > ROW_LIMIT && (
-            <li className="px-5 py-2">
-              <button
-                type="button"
-                onClick={() => setShowAll(true)}
-                className="text-xs font-medium uppercase tracking-wider text-brand hover:text-brand-dark"
-              >
+            <li className="py-1 pl-[52px] pr-7">
+              <Button variant="ghost" size="sm" className="-ml-3.5" onClick={() => setShowAll(true)}>
                 Show all {total.toLocaleString()} files
-              </button>
+              </Button>
             </li>
           )}
         </ul>
@@ -857,17 +790,17 @@ function FileRow({
   }
 
   return (
-    <li className="flex items-center gap-3 py-2 pl-11 pr-5">
+    <li className="flex min-h-11 items-center gap-3 py-2 pl-[52px] pr-7">
       <StatusIcon status={file.status} />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm text-ink">{file.filename}</p>
         {showFolder && file.folderPath && (
-          <p className="flex items-center gap-1 truncate text-xs font-light text-muted">
+          <p className="flex items-center gap-1 truncate text-xs text-secondary">
             <Folder size={11} className="shrink-0" />
             {file.folderPath}
           </p>
         )}
-        {note && <p className="truncate text-xs font-light text-muted">{note}</p>}
+        {note && <p className="truncate text-xs text-secondary">{note}</p>}
       </div>
     </li>
   );
@@ -877,18 +810,18 @@ function PhaseGlyph({ phase, failed }: { phase: DownloadPhase; failed: boolean }
   switch (phase) {
     case "complete":
       return failed ? (
-        <AlertTriangle size={18} className="text-error" />
+        <AlertTriangle size={14} className="text-error" />
       ) : (
-        <CheckCircle2 size={18} className="text-success" />
+        <CheckCircle2 size={14} className="text-success" />
       );
     case "error":
-      return <XCircle size={18} className="text-error" />;
+      return <XCircle size={14} className="text-error" />;
     case "review":
-      return <ListChecks size={18} className="text-brand" />;
+      return <ListChecks size={14} className="text-blue" />;
     case "zipping":
-      return <FileArchive size={18} className="text-brand" />;
+      return <FileArchive size={14} className="text-blue" />;
     default:
-      return <Loader2 size={18} className="animate-spin text-brand" />;
+      return <Spinner size={14} />;
   }
 }
 
@@ -899,8 +832,8 @@ function StatusIcon({ status }: { status: FileProgress["status"] }) {
     case "error":
       return <XCircle size={15} className="shrink-0 text-error" />;
     case "downloading":
-      return <Loader2 size={15} className="shrink-0 animate-spin text-brand" />;
+      return <Spinner size={15} />;
     case "pending":
-      return <Clock size={15} className="shrink-0 text-muted/40" />;
+      return <Clock size={15} className="shrink-0 text-line-strong" />;
   }
 }

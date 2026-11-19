@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { FolderInput, Loader2, ArrowRight } from "lucide-react";
+import { AlertTriangle, ArrowRight, FolderInput } from "lucide-react";
+import { Button, Eyebrow, Spinner, StatusBand } from "@/components/ui";
 
 function parseProjectId(input: string): number | null {
   const trimmed = input.trim();
@@ -37,69 +38,68 @@ export default function ProjectInput({ onSubmit, loading, error }: Props) {
   const shownError = validationError || error;
 
   return (
-    <div className="mx-auto flex w-full max-w-lg flex-col items-center px-6 py-16 sm:py-24">
-      <div className="flex h-14 w-14 items-center justify-center rounded-md bg-brand-tint text-brand">
-        <FolderInput size={26} strokeWidth={1.75} />
-      </div>
+    <div className="mx-auto w-full max-w-xl px-3 py-10 sm:py-16">
+      <section className="sh-content-surface sh-rise p-7 sm:p-10">
+        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-ice text-navy">
+          <FolderInput size={22} strokeWidth={1.75} />
+        </span>
 
-      <h1 className="mt-6 text-center text-2xl font-bold text-ink">
-        Open a Project
-      </h1>
-      <p className="mt-2 max-w-sm text-center text-sm font-light leading-relaxed text-muted">
-        Enter a Filevine project ID or paste a project link to browse its folders
-        and download documents as an archive.
-      </p>
-
-      <form onSubmit={handleSubmit} className="mt-8 w-full">
-        <label
-          htmlFor="project-id"
-          className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-ink"
-        >
-          Project ID or URL
-        </label>
-        <input
-          id="project-id"
-          type="text"
-          value={input}
-          onChange={(e) => {
-            setInput(e.target.value);
-            setValidationError(null);
-          }}
-          placeholder="e.g. 12345"
-          className="w-full rounded-sm border border-line bg-surface px-3.5 py-3 text-sm text-ink placeholder-muted/70 transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand-light/40"
-          disabled={loading}
-          autoFocus
-        />
-        <p className="mt-1.5 text-xs font-light text-muted">
-          Accepts a numeric ID or a full{" "}
-          <span className="text-ink/70">app.filevine.com/projects/&hellip;</span>{" "}
-          link.
+        <Eyebrow className="mt-6">Filevine</Eyebrow>
+        <h1 className="mt-2 text-3xl text-ink">Open a project</h1>
+        <p className="mt-3 max-w-md text-base text-secondary">
+          Enter a Filevine project ID or paste a project link to browse its folders
+          and download documents as an archive.
         </p>
 
-        {shownError && (
-          <div className="mt-4 rounded-sm border border-error/30 bg-error/5 px-3.5 py-2.5">
-            <p className="text-sm text-error">{shownError}</p>
-          </div>
-        )}
+        <form onSubmit={handleSubmit} className="mt-8">
+          <label htmlFor="project-id" className="sh-eyebrow mb-2 block pl-5">
+            Project ID or URL
+          </label>
+          <input
+            id="project-id"
+            type="text"
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setValidationError(null);
+            }}
+            placeholder="e.g. 12345"
+            aria-invalid={shownError ? true : undefined}
+            aria-describedby={shownError ? "project-id-error" : "project-id-hint"}
+            className={`h-12 w-full rounded-full border bg-solid px-5 font-mono text-base text-ink placeholder:text-tertiary transition-[border-color,box-shadow] duration-[180ms] ease-sh focus:outline-none focus:ring-[3px] focus:ring-focus disabled:opacity-60 ${
+              shownError ? "border-error" : "border-line focus:border-blue"
+            }`}
+            disabled={loading}
+            autoFocus
+          />
+          <p id="project-id-hint" className="mt-2 pl-5 text-xs text-secondary">
+            Accepts a numeric ID or a full{" "}
+            <span className="font-mono text-ink">app.filevine.com/projects/&hellip;</span> link.
+          </p>
 
-        <button
-          type="submit"
-          disabled={loading || !input.trim()}
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded-sm bg-brand px-4 py-3 text-sm font-semibold uppercase tracking-wider text-white transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {loading ? (
-            <>
-              <Loader2 size={18} className="animate-spin" />
-              Opening Project
-            </>
-          ) : (
-            <>
-              Open Project
-              <ArrowRight size={17} />
-            </>
+          {shownError && (
+            <StatusBand
+              tone="error"
+              className="mt-4"
+              icon={<AlertTriangle size={16} />}
+            >
+              <p id="project-id-error">{shownError}</p>
+            </StatusBand>
           )}
-        </button>
-      </form>
+
+          <Button
+            type="submit"
+            size="lg"
+            fullWidth
+            className="mt-6"
+            disabled={loading || !input.trim()}
+            icon={loading ? <Spinner size={18} className="text-white" /> : undefined}
+            iconAfter={loading ? undefined : <ArrowRight size={17} />}
+          >
+            {loading ? "Opening project" : "Open project"}
+          </Button>
+        </form>
+      </section>
     </div>
   );
 }
